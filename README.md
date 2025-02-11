@@ -1,6 +1,6 @@
 
 ## Overview
-Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch, and various other tools to automatically target and aim at enemies within the game. The AI model in repository has been trained on more than 30,000 images from popular first-person shooter games like Warface, Destiny 2, Battlefield (all series), Fortnite, The Finals, CS2 and more.
+Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch, and various other tools to automatically target and aim at enemies within the games like Warface, Destiny 2, Battlefield (all series), Fortnite, The Finals, CS2.
 > [!WARNING]
 > Use it at your own risk, There is NO guarentee this will not get you banned!
 
