@@ -1,11 +1,18 @@
 cuda_python
 bettercam
 numpy
+numba==0.61.0
+numba-cuda==0.3.0
+lazy_loader==0.4
 pywin32
 screeninfo
 asyncio
-onnxruntime
-onnxruntime-gpu
+pip install cupy-cuda12x
+onnx==1.17.0
+onnxruntime-gpu==1.20.1
+onnxslim==0.1.48
+onnxruntime==1.20.1
+roboflow
 pyserial
 requests
 opencv-python
@@ -14,3 +21,6 @@ ultralytics
 keyboard
 mss
 supervision
+tensorrt-cu12==10.3.0
+tensorrt-cu12_bindings==10.3.0
+tensorrt-cu12_libs==10.3.0
