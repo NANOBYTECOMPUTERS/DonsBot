@@ -7,7 +7,7 @@ lazy_loader==0.4
 pywin32
 screeninfo
 asyncio
-pip install cupy-cuda12x
+cupy-cuda12x
 onnx==1.17.0
 onnxruntime-gpu==1.20.1
 onnxslim==0.1.48
