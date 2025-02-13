@@ -8,7 +8,7 @@ class ConfigEditor:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Config Editor")
-        self.config = cfg.config  # Add this line to initialize config
+        self.config = cfg.config
         notebook = ttk.Notebook(self.root)
         
         # Store widgets and variables for saving
@@ -19,6 +19,7 @@ class ConfigEditor:
         current_config = cfg.config
         
         for section in Config.CONFIG_SECTIONS.values():
+      
             tab = ttk.Frame(notebook)
             notebook.add(tab, text=section)
             
@@ -48,11 +49,25 @@ class ConfigEditor:
         
         notebook.pack(expand=True, fill='both', padx=5, pady=5)
         
+        # Button frame for Save and Close
+        button_frame = ttk.Frame(self.root)
+        button_frame.pack(pady=10)
+        
         # Save button
-        save_btn = ttk.Button(self.root, text="Save", command=self.save_config)
-        save_btn.pack(pady=10)
+        save_btn = ttk.Button(button_frame, text="Save", command=self.save_config)
+        save_btn.pack(side='left', padx=5)
+        
+        # Close button
+        close_btn = ttk.Button(button_frame, text="Close", command=self.root.destroy)
+        close_btn.pack(side='left', padx=5)
 
     def save_config(self):
+        # Update config with new values from widgets
+        for (section, key), var in self.variables.items():
+            value = var.get()
+            # Convert to string for ConfigParser
+            self.config[section][key] = str(value)
+        
         directory = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(directory, "config.ini")
         
