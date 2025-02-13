@@ -11,6 +11,8 @@ from config_watcher import cfg
 from shooting import shooting
 from visual import visuals
 
+if cfg.arduino_move or cfg.arduino_shoot:
+    from arduino import arduino
 if cfg.mouse_rzr:
     from rzctl import RZControl
 if cfg.mouse_ghub:
@@ -41,6 +43,7 @@ class MouseThread:
         self.disable_prediction = cfg.disable_prediction
         self.prediction_interval = cfg.prediction_interval
         self.bscope_multiplier = cfg.bscope_multiplier
+
         self.screen_width = cfg.detection_window_width
         self.screen_height = cfg.detection_window_height
         self.center_x = self.screen_width / 2.0
@@ -50,6 +53,7 @@ class MouseThread:
         self.prev_velocity = None
         self.prev_time = None
         self.max_distance = math.sqrt(self.screen_width**2 + self.screen_height**2) / 2.0
+
         self.min_speed_multiplier = cfg.mouse_min_speed_multiplier
         self.max_speed_multiplier = cfg.mouse_max_speed_multiplier
         self.bscope = False
@@ -59,7 +63,6 @@ class MouseThread:
 
         if cfg.mouse_ghub:
             self.ghub = gHub()
-
         if cfg.mouse_rzr:
             dll_name = "rzctl.dll"
             script_directory = os.path.dirname(os.path.abspath(__file__))
@@ -67,7 +70,7 @@ class MouseThread:
             self.rzr = RZControl(dll_path)
             if not self.rzr.init():
                 print("Failed to initialize rzctl")
-                
+
         self.hotkey_codes = []
         for key in cfg.hotkey_targeting:
             code = Buttons.KEY_CODES.get(key.strip())
@@ -80,6 +83,7 @@ class MouseThread:
         return torch.device(f'cuda:{cfg.ai_device}')
 
     def process_data(self, data):
+
         if isinstance(data, sv.Detections):
             target_data = data.xyxy.mean(axis=1)
             target_w = data.xyxy[:, 2] - data.xyxy[:, 0]
@@ -105,8 +109,9 @@ class MouseThread:
         else:
             move_x, move_y = self.calc_movement(target_x, target_y)
 
-        if ((cfg.show_window and (cfg.show_target_line or cfg.show_target_prediction_line or cfg.show_history_points)) or
-                (cfg.show_overlay and (cfg.show_target_line or cfg.show_target_prediction_line or cfg.show_history_points))):
+        show_target_visuals = ( (cfg.show_window or cfg.show_overlay) and 
+                                (cfg.show_target_line or cfg.show_target_prediction_line or cfg.show_history_points) )
+        if show_target_visuals:
             if cfg.show_target_line:
                 visuals.draw_target_line(target_x, target_y, target_cls)
             if cfg.show_target_prediction_line and not self.disable_prediction:
@@ -118,8 +123,12 @@ class MouseThread:
         self.bscope = (self.check_target_in_scope(target_x, target_y, target_w, target_h, self.bscope_multiplier)
                        if (cfg.auto_shoot or cfg.triggerbot) else False)
         self.bscope = cfg.force_click or self.bscope
-        shooting.queue.put((self.bscope, self.get_shooting_key_state()))
-        self.move_mouse(move_x, move_y)
+
+        shooting_key_state = self.get_shooting_key_state()
+
+        shooting.queue.put((self.bscope, shooting_key_state))
+
+        self.move_mouse(move_x, move_y, shooting_key_state)
 
     def predict_target_position(self, target_x, target_y, current_time):
         if self.prev_time is None or self.prev_position is None or self.prev_velocity is None:
@@ -127,9 +136,11 @@ class MouseThread:
             self.prev_velocity = (0.0, 0.0)
             self.prev_time = current_time
             return target_x, target_y
+
         delta_time = current_time - self.prev_time
         if delta_time == 0:
             return target_x, target_y
+
         curr_pos = (target_x, target_y)
         velocity = (
             (curr_pos[0] - self.prev_position[0]) / delta_time,
@@ -142,9 +153,11 @@ class MouseThread:
         pred_int = delta_time * self.prediction_interval
         predicted_x = curr_pos[0] + velocity[0] * pred_int + 0.5 * acceleration[0] * (pred_int ** 2)
         predicted_y = curr_pos[1] + velocity[1] * pred_int + 0.5 * acceleration[1] * (pred_int ** 2)
+
         self.prev_position = curr_pos
         self.prev_velocity = velocity
         self.prev_time = current_time
+
         return predicted_x, predicted_y
 
     def calculate_speed_multiplier(self, distance):
@@ -164,17 +177,20 @@ class MouseThread:
         move_y = (mouse_move_y / 360) * (self.dpi / self.mouse_sensitivity) * speed_multiplier
         return move_x, move_y
 
-    def move_mouse(self, x, y):
+
+    def move_mouse(self, x, y, shooting_key_state):
         x = x if x is not None else 0
         y = y if y is not None else 0
         if x != 0 or y != 0:
-            if (self.get_shooting_key_state() and not cfg.mouse_auto_aim and not cfg.triggerbot) or cfg.mouse_auto_aim:
+            if (shooting_key_state and not cfg.mouse_auto_aim and not cfg.triggerbot) or cfg.mouse_auto_aim:
                 if not cfg.mouse_ghub and not cfg.arduino_move and not cfg.mouse_rzr:
                     win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(x), int(y), 0, 0)
                 elif cfg.mouse_ghub and not cfg.arduino_move and not cfg.mouse_rzr:
                     self.ghub.mouse_xy(int(x), int(y))
                 elif cfg.mouse_rzr:
                     self.rzr.mouse_move(int(x), int(y), True)
+                elif cfg.arduino_move:
+                    arduino.move(int(x), int(y))
 
     def get_shooting_key_state(self):
         for key_code in self.hotkey_codes:
