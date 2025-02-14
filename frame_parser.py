@@ -9,6 +9,7 @@ from hotkeys_watcher import hotkeys_watcher
 from mouse import mouse
 from shooting import shooting
 from visual import visuals
+from overlay import overlay
 
 HEADSHOT_CLASS = 7
 DEFAULT_COLOR = sv.ColorPalette.DEFAULT
@@ -19,15 +20,14 @@ DEFAULT_TEXT_PADDING = 10
 DEFAULT_TEXT_POSITION = sv.Position.TOP_LEFT
 HEADSHOT_WEIGHT = 0.5
 NON_HEADSHOT_WEIGHT = 3.0
-MIN_DETECTIONS_FOR_CUDA = 50
+MIN_DETECTIONS_FOR_CUDA = 2
 
 class Target:
     def __init__(self, x1, y1, x2, y2, cls, id=None):
         self.x = x1
-        if cls == HEADSHOT_CLASS:
-            self.y = y1  # Direct head targeting
-        else:
-            self.y = y1 - cfg.body_y_offset * (y2 - y1)
+        # Validate configuration offset: use a default value if not a float
+        offset = cfg.body_y_offset if isinstance(getattr(cfg, 'body_y_offset', None), (int, float)) else 0.0
+        self.y = y1 if cls == HEADSHOT_CLASS else y1 - offset * (y2 - y1)
         self.w = x2 - x1
         self.h = y2 - y1
         self.cls = cls
@@ -63,9 +63,9 @@ class FrameParser:
         self.current_locked_target_id = None
         self.previous_target = None
         self.switch_threshold = getattr(cfg, 'switch_threshold', 1.0)
-        self.smoothing_factor = getattr(cfg, 'smoothing_factor', 0.99)
-        self.screen_width = cfg.detection_window_width
-        self.screen_height = cfg.detection_window_height
+        self.smoothing_factor = getattr(cfg, 'smoothing_factor', 0.999)
+        self.screen_width = getattr(cfg, 'detection_window_width', 1920)
+        self.screen_height = getattr(cfg, 'detection_window_height', 1080)
         self.bounding_box_annotator = sv.BoxAnnotator(
             color=DEFAULT_COLOR,
             thickness=2,
@@ -108,7 +108,7 @@ class FrameParser:
 
     def _process_yolo_detections(self, results):
         for frame in results:
-            if frame.boxes:
+            if hasattr(frame, "boxes") and frame.boxes:
                 target = self.sort_targets(frame)
                 self._handle_target(target, frame)
                 self._annotate_frame(frame)
@@ -122,8 +122,7 @@ class FrameParser:
                     tracker_ids = frame.tracker_id
                     locked_idx = self._get_locked_index(tracker_ids)
                     if target and target.cls == HEADSHOT_CLASS:
-                        if self.current_locked_target_id is not None:
-                            self.switch_threshold *= 1.2
+                        self.switch_threshold *= 1.2
                     if locked_idx != -1:
                         box = frame.xyxy[locked_idx]
                         center_x, center_y, cls, id = self._extract_target_info(frame, locked_idx, box)
@@ -195,29 +194,45 @@ class FrameParser:
             )
             visuals.queue.put(annotated_image)
         if cfg.show_overlay:
-            from overlay import overlay
             for box, cls, conf, id in zip(frame.xyxy, frame.class_id, frame.confidence, frame.tracker_id):
                 text = f"{self.cls_model_data.get(cls, 'Unknown')}\nConf: {conf:.2f}\nID: {id}"
                 overlay.draw_text(box[0], box[1] - 15, text, 12, 'white')
                 overlay._draw_square(box[0], box[1], box[2], box[3], 'green', 2)
 
     def sort_targets(self, frame):
-        if isinstance(frame, sv.Detections):
-            boxes_array, classes_array, ids_array = self._convert_sv_to_numpy(frame)
+        # Validate input structure early
+        if hasattr(frame, "xyxy") and hasattr(frame, "class_id"):
+            if isinstance(frame, sv.Detections):
+                boxes_array, classes_array, ids_array = self._convert_sv_to_numpy(frame)
+            else:
+                # Validate that required attributes exist
+                if not (hasattr(frame, "boxes") and hasattr(frame.boxes, "xywh") and hasattr(frame.boxes, "cls")):
+                    return None
+                boxes_array = np.ascontiguousarray(frame.boxes.xywh.cpu().numpy())
+                classes_array = np.ascontiguousarray(frame.boxes.cls.cpu().numpy())
+                ids_array = np.ascontiguousarray(frame.boxes.id.cpu().numpy() if frame.boxes.id is not None
+                                                 else np.zeros_like(classes_array))
         else:
-            boxes_array = np.ascontiguousarray(frame.boxes.xywh.cpu().numpy())
-            classes_array = np.ascontiguousarray(frame.boxes.cls.cpu().numpy())
-            ids_array = np.ascontiguousarray( 4,
-                frame.boxes.id.cpu().numpy() if frame.boxes.id is not None
-                else np.zeros_like(classes_array)
-            )
+            return None
+
         if classes_array.size == 0:
             return None
-        if boxes_array.shape[0] >= MIN_DETECTIONS_FOR_CUDA:
-            return self._find_nearest_target_cuda_wrapper(boxes_array, classes_array, ids_array)
-        else:
-            return self._find_nearest_target_cpu(boxes_array, classes_array, ids_array)
 
+        if boxes_array.shape[0] >= MIN_DETECTIONS_FOR_CUDA:
+            # Add confidence values to the CUDA calculation
+            confidence_array = frame.confidence if isinstance(frame, sv.Detections) else frame.boxes.conf.cpu().numpy()
+            
+            # Modify weights based on both class and confidence
+            weights = np.ones(boxes_array.shape[0], dtype=np.float32)
+            if not cfg.disable_headshot:
+                # Prioritize headshots and weight by confidence
+                weights[classes_array == HEADSHOT_CLASS] *= 0.5  # Original headshot weight
+                weights *= (1 + confidence_array)  # Add confidence as tie breaker
+            else:
+                weights[classes_array == HEADSHOT_CLASS] *= NON_HEADSHOT_WEIGHT
+                weights *= (1 + confidence_array)
+                
+            return self._find_nearest_target_cuda_wrapper(boxes_array, classes_array, ids_array, weights)
     def _convert_sv_to_numpy(self, frame):
         xyxy = frame.xyxy
         xywh = np.column_stack([
@@ -230,40 +245,47 @@ class FrameParser:
         ids_array = frame.tracker_id.astype(np.int32) if frame.tracker_id is not None else np.zeros_like(classes_array)
         return xywh, classes_array, ids_array
 
-    def _find_nearest_target_cuda_wrapper(self, boxes_array, classes_array, ids_array):
+    def _find_nearest_target_cuda_wrapper(self, boxes_array, classes_array, ids_array, weights):
+    # Method implementation
         center = np.array([self.screen_width / 2, self.screen_height / 2], dtype=np.float32)
+        d_center = cuda.to_device(center)
         weights = np.ones(boxes_array.shape[0], dtype=np.float32)
         if not cfg.disable_headshot:
             weights[classes_array != HEADSHOT_CLASS] = HEADSHOT_WEIGHT
         else:
             weights[classes_array == HEADSHOT_CLASS] = NON_HEADSHOT_WEIGHT
 
+        # Ensure arrays are contiguous and of proper datatype.
         boxes_array = np.ascontiguousarray(boxes_array.astype(np.float32))
         classes_array = np.ascontiguousarray(classes_array.astype(np.float32))
         ids_array = np.ascontiguousarray(ids_array.astype(np.float32))
         weights = np.ascontiguousarray(weights)
-        init_result = np.array([np.inf, -1], dtype=np.float32)
 
+        init_result = np.array([np.inf, -1], dtype=np.float32)
         d_boxes = cuda.to_device(boxes_array)
         d_classes = cuda.to_device(classes_array)
         d_ids = cuda.to_device(ids_array)
         d_center = cuda.to_device(center)
         d_weights = cuda.to_device(weights)
         d_result = cuda.to_device(init_result)
-
         threadsperblock = min(1024, boxes_array.shape[0])
         blockspergrid = (boxes_array.shape[0] + threadsperblock - 1) // threadsperblock
+        
+        try:
+            _find_nearest_target_cuda[blockspergrid, threadsperblock](
+                d_boxes, d_classes, d_ids, d_center, d_weights, (not cfg.disable_headshot), d_result
+            )
+            result = d_result.copy_to_host()
+        except cuda.CudaAPIError:
+            # Fall back to the CPU version in case of a CUDA error.
+            return self._find_nearest_target_cpu(boxes_array, classes_array, ids_array)
 
-        _find_nearest_target_cuda[blockspergrid, threadsperblock](
-            d_boxes, d_classes, d_ids, d_center, d_weights, (not cfg.disable_headshot), d_result
-        )
-        result = d_result.copy_to_host()
         if result[0] == np.inf:
             return None
         nearest_id = int(result[1])
         if nearest_id == -1:
             if ids_array.size > 0:
-                first_detection = (boxes_array[0, 0], boxes_array[0, 1], 
+                first_detection = (boxes_array[0, 0], boxes_array[0, 1],
                                    boxes_array[0, 0] + boxes_array[0, 2], boxes_array[0, 1] + boxes_array[0, 3],
                                    classes_array[0], ids_array[0])
                 return Target(*first_detection)
@@ -275,7 +297,7 @@ class FrameParser:
                        classes_array[nearest_idx], nearest_id)
         return Target(*target_info)
 
-    def _find_nearest_target_cpu(self, boxes_array, classes_array, ids_array):
+    def _find_nearest_target_cpu(self, boxes_array, classes_array, ids_array, weights):
         center = np.array([self.screen_width / 2, self.screen_height / 2], dtype=np.float32)
         best_distance = np.inf
         best_target = None
@@ -295,7 +317,6 @@ class FrameParser:
                 distance_sq = (distance_sq / area) if area > 0 else distance_sq
             if distance_sq < best_distance:
                 best_distance = distance_sq
-                # Use a tuple instead of np.concatenate to avoid extra overhead.
                 target_params = (boxes_array[i, 0], boxes_array[i, 1],
                                  boxes_array[i, 0] + boxes_array[i, 2],
                                  boxes_array[i, 1] + boxes_array[i, 3],
@@ -304,11 +325,21 @@ class FrameParser:
         return best_target
 
     def get_device(self):
-        if cfg.ai_enable_amd:
-            return torch.device(f'hip:{cfg.ai_device}')
-        elif 'cpu' in cfg.ai_device:
+        # Validate device selection based on safe/allowed inputs.
+        try:
+            ai_device = str(getattr(cfg, 'ai_device', 'cpu')).strip().lower()
+            if getattr(cfg, 'ai_enable_amd', False):
+                device_str = f'hip:{ai_device}'
+            elif 'cpu' in ai_device:
+                device_str = 'cpu'
+            elif ai_device.isdigit():
+                device_str = f'cuda:{ai_device}'
+            else:
+                # If the device is not recognized, use GPU device 0 by default.
+                device_str = 'cuda:0'
+            return torch.device(device_str)
+        except Exception:
+            # Fall back to CPU on any error.
             return torch.device('cpu')
-        else:
-            return torch.device(f'cuda:{cfg.ai_device}')
 
 frame_parser = FrameParser()
