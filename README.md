@@ -62,6 +62,9 @@ Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch
 ## Support the project
 [cashapp] $DonArrington
 
+ghub installer https://download01.logi.com/web/ftp/pub/techsupport/gaming/lghub_installer_2021.3.5164.exe
+
+
 # For Sunones Models
 [Boosty](https://boosty.to/sunone)
 
