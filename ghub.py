@@ -81,5 +81,5 @@ class INPUT(Structure):
         ('type', DWORD),
         ('union', _INPUTunion)
     )
-if __name__ == "__main__":
+
     gHub = GhubMouse()
