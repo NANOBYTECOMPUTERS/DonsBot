@@ -7,6 +7,7 @@ import numpy as np
 import supervision as sv
 from config_watcher import cfg
 
+
 class Overlay:
     def __init__(self):
         self.queue = queue.Queue()
@@ -87,5 +88,3 @@ class Overlay:
         if self.thread is None:
             self.thread = threading.Thread(target=self.run, args=(width, height), daemon=True, name="Overlay")
             self.thread.start()
-
-overlay = Overlay()

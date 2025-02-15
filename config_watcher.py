@@ -1,7 +1,9 @@
 import configparser
 import random
 import os
-
+from threading import Lock
+from configeditor import ConfigEditor  # Move import here
+from utils import log_error
 class Config:
     CONFIG_SECTIONS = {
         "DETECTION_WINDOW": "Detection window",
@@ -18,7 +20,20 @@ class Config:
 
     def __init__(self):
         self.config = configparser.ConfigParser()
+        self.editor_lock = Lock()
+        self.restart_callback = None
         self.read(verbose=False)
+
+    def set_restart_callback(self, callback):
+        self.restart_callback = callback
+
+    def edit_config(self):
+        with self.editor_lock:
+            try:
+                editor = ConfigEditor(self, self.restart_callback)
+                editor.show()
+            except Exception as e:
+                log_error("Error opening config editor: {e}")
 
     def read(self, verbose=True):
         directory = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +65,7 @@ class Config:
         section = self.CONFIG_SECTIONS["DETECTION_WINDOW"]
         self.detection_window_width = int(self.config[section]["detection_window_width"])
         self.detection_window_height = int(self.config[section]["detection_window_height"])
-        self.circle_capture = self.config.getboolean(section, "circle_capture")
+        self.polygon_mask_enabled = self.config.getboolean(section, "polygon_mask_enabled", fallback=False)
         self.use_padding = self.config.getboolean(section, "use_padding")
         self.shared_memory_usage = self.config.getboolean(section, "shared_memory_usage")
         self.show_trajectory = self.config.getboolean(section, "show_trajectory")
@@ -162,10 +177,13 @@ class Config:
             return "Calculator"
         
     def edit_config(self):
-        """Opens config editor GUI"""
-        from configeditor import ConfigEditor
-        editor = ConfigEditor()
-        editor.show()
+        with self.editor_lock:
+            try:
+                editor = ConfigEditor(self, self.restart_callback)
+                editor.show()
+            except Exception as e:
+                log_error("Error opening config editor: {e}")
+
     def write(self):
         """Write current configuration to file"""
         directory = os.path.dirname(os.path.abspath(__file__))

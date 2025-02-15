@@ -8,18 +8,13 @@ import win32con
 import supervision as sv
 from buttons import Buttons
 from config_watcher import cfg
-from shooting import shooting
-from visual import visuals
+from utils import get_torch_device
+from utils import log_error
 
-# Validate configuration values (this is essential if cfg can be externally controlled)
-def validate_config():
-    try:
-        assert cfg.mouse_dpi > 0, "Invalid DPI value."
-        assert cfg.mouse_sensitivity > 0, "Invalid mouse sensitivity."
-    except AssertionError as e:
-        raise ValueError(f"Configuration error: {e}")
 
-validate_config()
+
+
+
 
 # Dynamic module imports based on config (ensure config is trusted)
 if getattr(cfg, "arduino_move", False) or getattr(cfg, "arduino_shoot", False):
@@ -60,8 +55,9 @@ class MouseNet(nn.Module):
 
 class MouseThread:
     """Thread for processing mouse movement, target prediction and shooting."""
-    def __init__(self):
-        self.device = self.get_device()
+    def __init__(self, context):
+        self.context = context
+        self.device = get_torch_device(cfg)
         # Validate numeric configuration values again
         try:
             self.dpi = float(cfg.mouse_dpi)
@@ -115,12 +111,6 @@ class MouseThread:
             if code is not None:
                 self.hotkey_codes.append(code)
 
-    def get_device(self):
-        """Return the torch device based on configuration."""
-        if 'cpu' in cfg.ai_device.lower():
-            return torch.device('cpu')
-        return torch.device(f'cuda:{cfg.ai_device}')
-
     def update_settings(self):
         """Update settings from the configuration file and precompute constants."""
         try:
@@ -140,13 +130,9 @@ class MouseThread:
             self.deg_per_pixel_x = self.fov_x / self.screen_width
             self.deg_per_pixel_y = self.fov_y / self.screen_height
         except Exception as exc:
-            print(f"Error updating settings: {exc}")
+            log_error("Error updating settings: {exc}")
 
     def process_data(self, data):
-        """
-        Process incoming detection data, predict the movement, draw visuals and  
-        trigger shooting based on the processed output.
-        """
         try:
             if isinstance(data, sv.Detections):
                 target_data = data.xyxy.mean(axis=1)
@@ -180,22 +166,22 @@ class MouseThread:
 
             if show_target_visuals:
                 if cfg.show_target_line:
-                    visuals.draw_target_line(target_x, target_y, target_cls)
+                    self.context.visuals.draw_target_line(target_x, target_y, target_cls)
                 if cfg.show_target_prediction_line and not self.disable_prediction:
                     predicted_x, predicted_y = self.predict_target_position(target_x, target_y, time.time())
-                    visuals.draw_predicted_position(predicted_x, predicted_y, target_cls)
+                    self.context.visuals.draw_predicted_position(predicted_x, predicted_y, target_cls)
                 if cfg.show_history_points:
-                    visuals.draw_history_point_add_point(target_x, target_y)
+                    self.context.visuals.draw_history_point_add_point(target_x, target_y)
 
             self.bscope = (self.check_target_in_scope(target_x, target_y, target_w, target_h, self.bscope_multiplier)
                            if (cfg.auto_shoot or cfg.triggerbot) else False)
             self.bscope = cfg.force_click or self.bscope
 
             shooting_key_state = self.get_shooting_key_state()
-            shooting.queue.put((self.bscope, shooting_key_state))
+            self.context.shooting.queue.put((self.bscope, shooting_key_state))
             self.move_mouse(move_x, move_y, shooting_key_state)
-        except Exception as exc:
-            print(f"Error in process_data: {exc}")
+        except Exception as e:
+            log_error("Error in process_data", e)  # Fixed logging
 
     def predict_target_position(self, target_x, target_y, current_time):
         """
@@ -265,7 +251,7 @@ class MouseThread:
                     elif cfg.arduino_move:
                         arduino.move(int(x), int(y))
         except Exception as exc:
-            print(f"Error in move_mouse: {exc}")
+            log_error("Error in move_mouse: {exc}")
 
     def get_shooting_key_state(self):
         """Check and return whether any of the configured hotkeys are pressed."""
@@ -277,7 +263,7 @@ class MouseThread:
                 if state < 0 or state == 1:
                     return True
         except Exception as exc:
-            print(f"Error checking shooting key state: {exc}")
+            log_error("Error checking shooting key state: {exc}")
         return False
 
     def check_target_in_scope(self, target_x, target_y, target_w, target_h, reduction_factor):
@@ -292,8 +278,5 @@ class MouseThread:
         bscope = (self.center_x > x1 and self.center_x < x2 and
                   self.center_y > y1 and self.center_y < y2)
         if cfg.show_window and cfg.show_bscope_box:
-            visuals.draw_bscope(x1, x2, y1, y2, bscope)
+            self.context.draw_bscope(x1, x2, y1, y2, bscope)
         return bscope
-
-
-mouse = MouseThread()

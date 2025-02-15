@@ -1,14 +1,21 @@
+# configeditor.py
 import tkinter as tk
 import os
 from tkinter import ttk
-from config_watcher import cfg, Config
-
+from utils import log_error
 class ConfigEditor:
-    # Fix for blank values in ConfigEditor
-    def __init__(self):
+    def __init__(self, config_obj, restart_callback=None):
         self.root = tk.Tk()
         self.root.title("Config Editor")
-        self.config = cfg.config
+        self.restart_callback = restart_callback
+        self.config = config_obj.config  # Use passed config object
+        
+        try:
+            config_obj.read(verbose=True)  # Force reload config
+            current_config = self.config
+        except Exception as e:
+            log_error("Error loading config: {e}")
+        
         notebook = ttk.Notebook(self.root)
         
         # Store widgets and variables for saving
@@ -16,56 +23,68 @@ class ConfigEditor:
         self.variables = {}
         
         # Get current config values
-        current_config = cfg.config
+        current_config = self.config
         
-        for section in Config.CONFIG_SECTIONS.values():
-      
+        for section in config_obj.CONFIG_SECTIONS.values():
             tab = ttk.Frame(notebook)
             notebook.add(tab, text=section)
             
-            # Get the current section's items
             section_items = current_config[section]
             
             row = 0
             for key, value in section_items.items():
-                # Create label
                 label = ttk.Label(tab, text=key)
                 label.grid(row=row, column=0, padx=5, pady=5)
                 
-                # Create appropriate widget based on value type
                 if isinstance(value, bool):
                     var = tk.BooleanVar(value=value)
-                    widget = ttk.Checkbutton(tab, variable=var)
+                    widget = ttk.Combobox(tab, values=['True', 'False'], state='readonly')
+                    widget.set(str(value))
+                    widget.bind('<<ComboboxSelected>>', lambda e, v=var: v.set(e.widget.get() == 'True'))
                 else:
                     var = tk.StringVar(value=str(value))
                     widget = ttk.Entry(tab, textvariable=var)
                 
                 widget.grid(row=row, column=1, padx=5, pady=5)
                 
-                # Store references
                 self.variables[(section, key)] = var
                 self.widgets[(section, key)] = widget
                 row += 1
         
         notebook.pack(expand=True, fill='both', padx=5, pady=5)
         
-        # Button frame for Save and Close
         button_frame = ttk.Frame(self.root)
         button_frame.pack(pady=10)
         
-        # Save button
         save_btn = ttk.Button(button_frame, text="Save", command=self.save_config)
         save_btn.pack(side='left', padx=5)
         
-        # Close button
-        close_btn = ttk.Button(button_frame, text="Close", command=self.root.destroy)
+        restart_btn = ttk.Button(button_frame, text="Save & Restart", 
+                              command=self.save_and_restart)
+        restart_btn.pack(side='left', padx=5)
+        
+        close_btn = ttk.Button(button_frame, text="Close", command=self.close)
         close_btn.pack(side='left', padx=5)
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def save_and_restart(self):
+        self.save_config()
+        if self.restart_callback:
+            try:
+                self.restart_callback()
+            except Exception as e:
+                log_error("Error during restart: {e}")
+        self.close()
+
+    def close(self):
+        if self.root and self.root.winfo_exists():
+            self.root.destroy()
+            self.root.quit()
 
     def save_config(self):
-        # Update config with new values from widgets
         for (section, key), var in self.variables.items():
             value = var.get()
-            # Convert to string for ConfigParser
             self.config[section][key] = str(value)
         
         directory = os.path.dirname(os.path.abspath(__file__))
@@ -77,5 +96,7 @@ class ConfigEditor:
     def show(self):
         self.root.mainloop()
 
-editor = ConfigEditor()
-editor.show()
+if __name__ == "__main__":
+    from config_watcher import cfg
+    editor = ConfigEditor(cfg)
+    editor.show()

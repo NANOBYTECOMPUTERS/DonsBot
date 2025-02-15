@@ -6,7 +6,6 @@ import win32api
 import win32con
 
 from config_watcher import cfg
-
 if cfg.mouse_rzr:
     from rzctl import RZControl, MOUSE_CLICK
 
@@ -18,7 +17,7 @@ if cfg.mouse_ghub:
 
 
 class Shooting(threading.Thread):
-    def __init__(self):
+    def __init__(self, context):
         super(Shooting, self).__init__()
         self.queue = queue.Queue(maxsize=1)
         self.daemon = True
@@ -73,6 +72,3 @@ class Shooting(threading.Thread):
         else:
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
         self.button_pressed = False
-        
-shooting = Shooting()
-shooting.start()

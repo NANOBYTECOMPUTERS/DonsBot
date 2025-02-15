@@ -3,13 +3,28 @@ import torch
 import onnx
 from onnxconverter_common import float16
 from config_watcher import cfg
+from utils import log_error
+def validate_config():
+    """Validate critical configuration values"""
+    numeric_configs = [
+        ('mouse_dpi', cfg.mouse_dpi, lambda x: x > 0),
+        ('mouse_sensitivity', cfg.mouse_sensitivity, lambda x: x > 0),
+        ('detection_window_width', cfg.detection_window_width, lambda x: x > 0),
+        ('detection_window_height', cfg.detection_window_height, lambda x: x > 0),
+    ]
+    for name, value, validator in numeric_configs:
+        try:
+            if not validator(float(value)):
+                raise ValueError(f"Invalid {name}: {value}")
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Configuration error: {e}")
 
 def convert_onnx_to_fp16():
     model = onnx.load(os.path.join("models", cfg.ai_model_name))
     model_fp16 = float16.convert_float_to_float16(model)
     new_model_name = cfg.ai_model_name.replace(".onnx", "_fp16.onnx")
     onnx.save(model_fp16, os.path.join("models", new_model_name))
-    print(f"Converted 'models/{new_model_name}'.\n"
+    log_error("Converted 'models/{new_model_name}'.\n"
           f"Please change the suffix name to '{new_model_name}' in your configuration.")
 
 def check_model_fp16():
@@ -67,10 +82,10 @@ def run_checks():
         if not check_model_fp16():
             check_converted_model = cfg.ai_model_name.replace(".onnx", "_fp16.onnx")
             if not os.path.exists(os.path.join("models", check_converted_model)):
-                print(f"The current ai model '{cfg.ai_model_name}' is in FP32. Converting model to FP16...")
+                log_error("The current ai model '{cfg.ai_model_name}' is in FP32. Converting model to FP16...")
                 convert_onnx_to_fp16()
             else:
-                print(f"Please use the converted model - '{check_converted_model}'.\n"
+                log_error("Please use the converted model - '{check_converted_model}'.\n"
                       f"Update your config.ini with 'ai_model_name = {check_converted_model}'")
     
     warnings()

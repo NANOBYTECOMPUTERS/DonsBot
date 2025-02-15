@@ -1,6 +1,6 @@
 
 ## Overview
-Dons Bot is a rewrite of Sunone_Aimbot. It is in testing phase so problems might happen. It leverages the YOLOV11 models, PyTorch, and various other tools to automatically target and aim at enemies within the games like Warface, Destiny 2, Battlefield (all series), Fortnite, The Finals, CS2, ETC.
+Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch, and various other tools to automatically target and aim at enemies within the game. The AI model in repository has been trained on more than 30,000 images from popular first-person shooter games like Warface, Destiny 2, Battlefield (all series), Fortnite, The Finals, CS2 and more.
 > [!WARNING]
 > Use it at your own risk, There is NO guarentee this will not get you banned!
 
@@ -58,7 +58,7 @@ Dons Bot is a rewrite of Sunone_Aimbot. It is in testing phase so problems might
 - Do not use the `--half` option, it will not improve performance.
 - Do not increase the object search window resolution, this may affect your search speed.
 - If you have started the application and nothing happens, it may be working, close it with the F2 key and change the `show_window` option to `True` in the file [config.ini](https://github.com/SunOner/sunone_aimbot/blob/main/config.ini) to make sure that the application is working.
-https://download01.logi.com/web/ftp/pub/techsupport/gaming/lghub_installer_2021.3.5164.exe
+
 ## Support the project
 [cashapp] $DonArrington
 

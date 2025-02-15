@@ -1,30 +1,31 @@
+# visuals.py
 import queue
 import threading
 import time
 import cv2
-import torch
 import win32gui
 import win32con
 import win32api
 import os
+import numpy as np
 from config_watcher import cfg
-from capture import capture
-from overlay import overlay
 from buttons import Buttons
+from utils import log_error
 
 SCREENSHOT_DIRECTORY = "screenshots"
 CIRCLE_RADIUS = 5
 
 class Visuals(threading.Thread):
-    def __init__(self):
-        # Validate critical configuration values
+    def __init__(self, context):
+        self.context = context
         try:
             detection_width = int(cfg.detection_window_width)
             detection_height = int(cfg.detection_window_height)
         except (ValueError, TypeError) as e:
+            log_error("Invalid detection window dimensions in config", e)
             raise ValueError("Invalid detection window dimensions in config") from e
 
-        overlay.show(detection_width, detection_height)
+        self.context.overlay.show(detection_width, detection_height)
         os.makedirs(SCREENSHOT_DIRECTORY, exist_ok=True)
         self.show_window = getattr(cfg, "show_window", False)
         self.show_overlay = getattr(cfg, "show_overlay", False)
@@ -36,7 +37,7 @@ class Visuals(threading.Thread):
             self.name = 'Visuals'
             self.image = None
             self.screenshot_taken = False
-            self.screenshot_lock = threading.Lock()  # Lock for screenshot flag
+            self.screenshot_lock = threading.Lock()
             self.interpolation = cv2.INTER_NEAREST if self.show_window else None
             self.draw_line_data = None
             self.draw_predicted_position_data = None
@@ -59,6 +60,9 @@ class Visuals(threading.Thread):
             self.disabled_line_classes = [2, 3, 4, 8, 9, 10]
             self.cached_resize_dims = None
             self.running = True
+            self.editing_mask = False
+            self.mask_points = self.context.capture.mask_points.copy()
+            self.selected_point = None
             self.start()
 
     def run(self):
@@ -73,11 +77,57 @@ class Visuals(threading.Thread):
                 self.running = False
                 break
 
-            # Validate image dimensions before proceeding
             if not hasattr(self.image, "shape"):
                 continue
             self.handle_screenshot()
             self.display_image()
+
+    def mouse_callback(self, event, x, y, flags, param):
+        if not self.show_window:
+            return
+
+        log_error(f"Mouse event: {event}, x: {x}, y: {y}")
+
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.editing_mask = True
+            # Find nearest point to click
+            distances = [((p[0] - x)**2 + (p[1] - y)**2) for p in self.mask_points]
+            if distances:
+                self.selected_point = distances.index(min(distances))
+                log_error(f"Selected point: {self.selected_point}")
+        elif event == cv2.EVENT_MOUSEMOVE and self.editing_mask and self.selected_point is not None:
+            self.mask_points[self.selected_point] = (x, y)
+            log_error(f"Updated point {self.selected_point} to {x}, {y}")
+        elif event == cv2.EVENT_LBUTTONUP and self.editing_mask:
+            self.editing_mask = False
+            self.selected_point = None
+            self.context.capture.save_mask_points(self.mask_points)
+            log_error("Mask points saved")
+
+    def display_image(self):
+        if self.show_window:
+            display_img = self.image.copy()
+            if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
+                display_img = self.resize_image(display_img)
+
+            # Draw mask points and lines if editing or points exist
+            if self.editing_mask or len(self.mask_points) > 0:
+                points = np.array(self.mask_points, dtype=np.int32)
+                cv2.polylines(display_img, [points], True, (0, 255, 0), 2)
+                for i, point in enumerate(self.mask_points):
+                    px, py = point
+                    if isinstance(px, (int, float)) and isinstance(py, (int, float)):
+                        cv2.circle(display_img, (int(px), int(py)), 5, (0, 0, 255), -1)
+                        cv2.putText(display_img, str(i), (int(px) + 10, int(py) - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                    else:
+                        log_error(f"Invalid point at index {i}: {point}")
+
+            cv2.imshow(getattr(cfg, "debug_window_name", "Debug Window"), display_img)
+            if self.show_window:
+                cv2.setMouseCallback(getattr(cfg, "debug_window_name", "Debug Window"), self.mouse_callback)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                self.running = False
+                self.cleanup()
 
     def handle_screenshot(self):
         screenshot_key = Buttons.KEY_CODES.get(getattr(cfg, "debug_window_screenshot_key", None))
@@ -97,21 +147,28 @@ class Visuals(threading.Thread):
         try:
             cv2.imwrite(filename, image)
         except Exception as e:
-            print(f"Error saving screenshot: {e}")
+            log_error("Error saving screenshot", e)
 
-    def display_image(self):
-        if self.show_window:
-            display_img = self.image
-            # Resize image only if needed and configured percentage is valid
-            if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
-                display_img = self.resize_image(display_img)
-            cv2.imshow(getattr(cfg, "debug_window_name", "Debug Window"), display_img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                self.running = False
-                self.cleanup()
+    def spawn_debug_window(self):
+        self.window_name = getattr(cfg, "debug_window_name", "Debug Window")
+        cv2.namedWindow(self.window_name)
+        if getattr(cfg, "debug_window_always_on_top", False):
+            try:
+                x = max(getattr(cfg, "spawn_window_pos_x", 0), 0)
+                y = max(getattr(cfg, "spawn_window_pos_y", 0), 0)
+                debug_window_hwnd = win32gui.FindWindow(None, self.window_name)
+                win32gui.SetWindowPos(
+                    debug_window_hwnd,
+                    win32con.HWND_TOPMOST,
+                    x, y,
+                    int(cfg.detection_window_width),
+                    int(cfg.detection_window_height),
+                    0
+                )
+            except Exception as e:
+                log_error("Error setting window to always on top", e)
 
     def resize_image(self, display_img):
-        # Check if cached dimensions need update
         if (self.cached_resize_dims is None or 
             (display_img.shape[0], display_img.shape[1]) != self.cached_resize_dims[2:]):
             try:
@@ -125,35 +182,10 @@ class Visuals(threading.Thread):
             width, height, _, _ = self.cached_resize_dims
         return cv2.resize(display_img, (width, height), self.interpolation)
 
-    def spawn_debug_window(self):
-        debug_window_name = getattr(cfg, "debug_window_name", "Debug Window")
-        cv2.namedWindow(debug_window_name)
-        if getattr(cfg, "debug_window_always_on_top", False):
-            try:
-                x = max(getattr(cfg, "spawn_window_pos_x", 0), 0)
-                y = max(getattr(cfg, "spawn_window_pos_y", 0), 0)
-                debug_window_hwnd = win32gui.FindWindow(None, debug_window_name)
-                win32gui.SetWindowPos(
-                    debug_window_hwnd,
-                    win32con.HWND_TOPMOST,
-                    x, y,
-                    int(cfg.detection_window_width),
-                    int(cfg.detection_window_height),
-                    0
-                )
-            except Exception as e:
-                print(f'Error setting window to always on top: {e}')
-
     def cleanup(self):
         self.running = False
         cv2.destroyAllWindows()
         cv2.waitKey(1)
-
-    def draw_aim_point(self, x, y):
-        if self.show_window and self.image is not None:
-            cv2.circle(self.image, (int(x), int(y)), radius=CIRCLE_RADIUS, color=(0, 0, 255), thickness=-1)
-        if self.show_overlay:
-            overlay.draw_circle(int(x), int(y), CIRCLE_RADIUS, 'red')
 
     def draw_target_line(self, target_x, target_y, target_cls):
         if target_cls not in self.disabled_line_classes:
@@ -179,4 +211,6 @@ class Visuals(threading.Thread):
         self.draw_bscope_data = None
         self.draw_history_point_data = []
 
-visuals = Visuals()
+    def draw_aim_point(self, x, y):
+        if self.show_window and self.image is not None:
+            cv2.circle(self.image, (int(x), int(y)), radius=CIRCLE_RADIUS, color=(0, 0, 255), thickness=-1)
