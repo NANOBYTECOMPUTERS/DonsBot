@@ -13,7 +13,7 @@ if cfg.arduino_move or cfg.arduino_shoot:
     from arduino import arduino
 
 if cfg.mouse_ghub:
-    from ghub import gHub
+    from ghub import GhubMouse
 
 
 class Shooting(threading.Thread):
@@ -25,7 +25,7 @@ class Shooting(threading.Thread):
         self.button_pressed = False
 
         if cfg.mouse_ghub:
-            self.ghub = gHub()
+            self.ghub = GhubMouse()
 
         if cfg.mouse_rzr:
             dll_name = "rzctl.dll"

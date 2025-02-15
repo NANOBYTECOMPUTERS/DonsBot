@@ -82,4 +82,3 @@ class INPUT(Structure):
         ('union', _INPUTunion)
     )
 
-    gHub = GhubMouse()

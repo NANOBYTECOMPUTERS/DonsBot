@@ -31,7 +31,8 @@ if getattr(cfg, "mouse_rzr", False):
 
 if getattr(cfg, "mouse_ghub", False):
     try:
-        from ghub import gHub
+        from ghub import GhubMouse
+
     except ImportError as ie:
         raise ImportError("gHub module required by cfg but not found.") from ie
 
@@ -91,7 +92,7 @@ class MouseThread:
         # Initialize additional modules based on cfg with error handling
         if getattr(cfg, "mouse_ghub", False):
             try:
-                self.ghub = gHub()
+                self.ghub = GhubMouse()
             except Exception as e:
                 raise RuntimeError("Failed to initialize gHub.") from e
 
