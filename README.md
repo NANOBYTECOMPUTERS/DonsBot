@@ -12,36 +12,13 @@ Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch
 
 
 ## Requirements
-  CUDA 12.4 or higher
-  Python 3.11.6
-  PyTorch 2.7.0 or higher
-  cuda_python
-  bettercam
-  numpy
-  pywin32
-  screeninfo
-  asyncio
-  onnxruntime
-  onnxruntime-gpu
-  pyserial
-  requests
-  opencv-python
-  packaging
-  ultralytics
-  keyboard
-  mss
-  supervision
-  tensorrt-cu12==10.3.0
-  tensorrt-cu12_bindings==10.3.0
-  tensorrt-cu12_libs==10.3.0
 
 
 ## MANUAL Installation links
-- Download and install [Python](https://www.python.org/downloads/).
-- Download and install [CUDA](https://developer.nvidia.com/cuda-toolkit).
-- Download and install [TensorRT](https://developer.nvidia.com/tensorrt).
-- Download and install [Ultralytics](https://github.com/ultralytics/yolov5).
-- Download and install [OpenCV](https://pypi.org/project/opencv-python/).
+- #Download and install [Python](https://www.python.org/downloads/).
+- #Download and install [CUDA](https://developer.nvidia.com/cuda-toolkit). 12.4 to 12.8 
+
+
 
 <br></br>
 - To launch the aimbot after all installations, double click deploy.bat or type `run.py` in cdm from the project folder.
