@@ -17,7 +17,7 @@ Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch
 ## MANUAL Installation links
 - #Download and install [Python](https://www.python.org/downloads/).
 - #Download and install [CUDA](https://developer.nvidia.com/cuda-toolkit). 12.4 to 12.8 
-
+  #Donwload and install [Pytorch](https://pytorch.org/get-started/locally/)
 
 
 <br></br>
