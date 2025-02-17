@@ -2,7 +2,7 @@ import math
 import numpy as np
 import torch
 from numba import cuda
-from numba.cuda.cudadrv.error import CudaDriverError  # Import the correct exception
+from numba.cuda.cudadrv.error import CudaDriverError
 import supervision as sv
 from config_watcher import cfg
 from utils import get_torch_device, log_error
@@ -14,8 +14,8 @@ DEFAULT_TEXT_SCALE = 0.5
 DEFAULT_TEXT_THICKNESS = 1
 DEFAULT_TEXT_PADDING = 5
 DEFAULT_TEXT_POSITION = sv.Position.TOP_LEFT
-HEADSHOT_WEIGHT = 0.5
-NON_HEADSHOT_WEIGHT = 3.0
+HEADSHOT_WEIGHT = 0.1  # Reduced to prioritize headshots
+NON_HEADSHOT_WEIGHT = 1.0
 MIN_DETECTIONS_FOR_CUDA = 2
 
 class Target:
@@ -42,9 +42,9 @@ def _find_nearest_target_cuda(boxes_array, classes_array, ids_array, center, wei
 
         if prioritize_headshot:
             if classes_array[idx] == HEADSHOT_CLASS:
-                distance_sq *= weights[idx]
+                distance_sq *= HEADSHOT_WEIGHT  # Headshots are considered closer
             else:
-                distance_sq *= HEADSHOT_WEIGHT
+                distance_sq *= NON_HEADSHOT_WEIGHT
         else:
             area = boxes_array[idx, 2] * boxes_array[idx, 3]
             if area > 0:
@@ -91,6 +91,7 @@ class FrameParser:
             9: 'fire',
             10: 'third_person'
         }
+        self.player_head_map = {}
 
     def parse(self, result):
         if isinstance(result, sv.Detections):
@@ -115,22 +116,40 @@ class FrameParser:
         if target:
             if self.context.hotkeys_watcher.clss is None:
                 self.context.hotkeys_watcher.clss = self.context.hotkeys_watcher.active_classes()
+            
             if target.cls in self.context.hotkeys_watcher.clss:
                 if self.current_locked_target_id is not None:
                     tracker_ids = frame.tracker_id
                     locked_idx = self._get_locked_index(tracker_ids)
-                    if target and target.cls == HEADSHOT_CLASS:
-                        self.switch_threshold *= 1.2
+                    
                     if locked_idx != -1:
                         box = frame.xyxy[locked_idx]
                         center_x, center_y, cls, id = self._extract_target_info(frame, locked_idx, box)
                         current_pos = np.array([center_x, center_y])
                         prev_pos = np.array([self.previous_target.x, self.previous_target.y]) if self.previous_target else current_pos
+                        
                         if np.linalg.norm(current_pos - prev_pos) <= self.switch_threshold:
-                            self.context.mouse.process_data((center_x, center_y, box[2] - box[0], box[3] - box[1], cls, id))
-                            self.context.visuals.draw_aim_point(center_x, center_y)  # Use context
-                            self.previous_target = Target(*box, cls, id)
+                            if cls == 0:  # If the target is a player
+                                # Check for associated head
+                                head_targets = [t for t in zip(frame.xyxy, frame.class_id, frame.tracker_id) if t[1] == HEADSHOT_CLASS and t[2] == id]
+                                if head_targets:
+                                    head_target = Target(*head_targets[0][0], HEADSHOT_CLASS, head_targets[0][2])
+                                    self.context.mouse.process_data((head_target.center_x, head_target.center_y, head_target.w, head_target.h, HEADSHOT_CLASS, head_target.id))
+                                    self.context.visuals.draw_aim_point(head_target.center_x, head_target.center_y)
+                                    self.previous_target = head_target
+                                    self.current_locked_target_id = head_target.id
+                                else:
+                                    # No head detected, keep the player body
+                                    self.context.mouse.process_data((center_x, center_y, box[2] - box[0], box[3] - box[1], cls, id))
+                                    self.context.visuals.draw_aim_point(center_x, center_y)
+                                    self.previous_target = Target(*box, cls, id)
+                            else:
+                                # Use the target data directly if not a player
+                                self.context.mouse.process_data((center_x, center_y, box[2] - box[0], box[3] - box[1], cls, id))
+                                self.context.visuals.draw_aim_point(center_x, center_y)
+                                self.previous_target = Target(*box, cls, id)
                         else:
+                            # Target has moved too far, potentially switch to a new one
                             new_target_info = Target(*box, cls, id)
                             self.context.mouse.process_data((center_x, center_y, box[2] - box[0], box[3] - box[1], cls, id))
                             self.current_locked_target_id = id
@@ -196,6 +215,7 @@ class FrameParser:
                 text = f"{self.cls_model_data.get(cls, 'Unknown')}\nConf: {conf:.2f}\nID: {id}"
                 self.context.overlay.draw_text(box[0], box[1] - 15, text, 12, 'white')
                 self.context.overlay._draw_square(box[0], box[1], box[2], box[3], 'green', 2)
+
 
     def sort_targets(self, frame):
         # Validate input structure early
@@ -307,7 +327,6 @@ class FrameParser:
         return Target(*target_info)
 
     def _find_nearest_target_cpu(self, boxes_array, classes_array, ids_array, weights):
-        """Vectorized CPU implementation to find the nearest target."""
         center = np.array([self.screen_width / 2, self.screen_height / 2], dtype=np.float32)
         cx = boxes_array[:, 0] + boxes_array[:, 2] / 2.0
         cy = boxes_array[:, 1] + boxes_array[:, 3] / 2.0
@@ -316,7 +335,7 @@ class FrameParser:
         distance_sq = dx ** 2 + dy ** 2
 
         if not cfg.disable_headshot:
-            distance_sq = np.where(classes_array == HEADSHOT_CLASS, distance_sq * 2.0, distance_sq * HEADSHOT_WEIGHT)
+            distance_sq = np.where(classes_array == HEADSHOT_CLASS, distance_sq * HEADSHOT_WEIGHT, distance_sq * NON_HEADSHOT_WEIGHT)
         else:
             area = boxes_array[:, 2] * boxes_array[:, 3]
             distance_sq = np.where(area > 0, distance_sq / area, distance_sq)

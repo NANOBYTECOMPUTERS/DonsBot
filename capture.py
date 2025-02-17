@@ -174,7 +174,7 @@ class Capture(threading.Thread):
                     self.frame_queue.put_nowait(frame)
             else:
                 # Slightly longer sleep to reduce CPU usage when no frame is available.
-                time.sleep(0.08)
+                time.sleep(0.01)
     
     def get_new_frame(self):
         """Retrieve a new frame from the frame queue with a timeout"""

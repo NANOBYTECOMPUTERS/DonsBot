@@ -1,4 +1,5 @@
-# visuals.py
+# visuals.py ---
+
 import queue
 import threading
 import time

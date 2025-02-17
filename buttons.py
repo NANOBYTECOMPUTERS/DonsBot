@@ -1,3 +1,4 @@
+#buttons.py
 class Buttons:
     KEY_CODES = {
         'None': 0,

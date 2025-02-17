@@ -1,3 +1,5 @@
+# overlay.py ---
+
 from tkinter import Canvas
 import tkinter as tk
 import tkinter.font as tkFont

@@ -1,3 +1,4 @@
+#arduino.py
 import os
 import psutil
 import serial
@@ -14,7 +15,7 @@ class ArduinoMouse:
             timeout=0,
             write_timeout=0
         )
-        self.serial_port.port = self.__detect_port() if self.cfg.arduino_port == 'auto' else self.cfg.arduino_port
+        self.serial_port.port = self._detect_port() if self.cfg.arduino_port == 'auto' else self.cfg.arduino_port
         try:
             self.serial_port.open()
             print(f'Arduino: Connected! Port: {self.serial_port.port}')

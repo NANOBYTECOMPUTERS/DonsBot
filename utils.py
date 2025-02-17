@@ -1,14 +1,17 @@
-# utils.py
+# utils.py ---
+
 import logging
 import time
 import cv2
 import torch
 
 class CudaLogFilter(logging.Filter):
-    """Filter to suppress CUDA memory deallocation logs"""
     def filter(self, record):
         msg = record.getMessage()
-        return not ("dealloc: cuMemFree_v2" in msg or "add pending dealloc: cuMemFree_v2" in msg)
+        # Add mouse events to filtered messages
+        return not ("dealloc: cuMemFree_v2" in msg or 
+                   "add pending dealloc: cuMemFree_v2" in msg or
+                   "mouse_event" in msg.lower())
 
 def setup_logging():
     """Set up logging configuration with CUDA log filtering"""

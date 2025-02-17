@@ -92,6 +92,7 @@ class Config:
         self.third_person = self.config.getboolean(section, "third_person")
         self.switch_threshold = float(self.config[section]["switch_threshold"])
         self.smoothing_factor = float(self.config[section]["smoothing_factor"])
+        self.prioritize_headshot = self.config.getboolean(section, "prioritize_headshot")
 
     def load_hotkeys(self):
         section = self.CONFIG_SECTIONS["HOTKEYS"]

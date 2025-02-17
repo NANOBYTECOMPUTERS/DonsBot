@@ -1,3 +1,4 @@
+# mouse.py ---
 import math
 import os
 import time
@@ -10,11 +11,6 @@ from buttons import Buttons
 from config_watcher import cfg
 from utils import get_torch_device
 from utils import log_error
-
-
-
-
-
 
 # Dynamic module imports based on config (ensure config is trusted)
 if getattr(cfg, "arduino_move", False) or getattr(cfg, "arduino_shoot", False):

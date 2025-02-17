@@ -1,3 +1,4 @@
+# rzctl.py ---
 import ctypes
 
 def enum(**enums):
