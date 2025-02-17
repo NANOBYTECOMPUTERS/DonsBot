@@ -156,19 +156,20 @@ class MouseThread:
             else:
                 move_x, move_y = self.calc_movement(target_x, target_y)
 
-            show_target_visuals = (
-                (cfg.show_window or cfg.show_overlay) and 
-                (cfg.show_target_line or cfg.show_target_prediction_line or cfg.show_history_points)
-            )
+           # show_target_visuals = (
+               # (cfg.show_window or cfg.show_overlay) and 
+               # (cfg.show_target_line or cfg.show_target_prediction_line or cfg.show_history_points)
+           # )
 
-            if show_target_visuals:
-                if cfg.show_target_line:
-                    self.context.visuals.draw_target_line(target_x, target_y, target_cls)
-                if cfg.show_target_prediction_line and not self.disable_prediction:
-                    predicted_x, predicted_y = self.predict_target_position(target_x, target_y, time.time())
-                    self.context.visuals.draw_predicted_position(predicted_x, predicted_y, target_cls)
-                if cfg.show_history_points:
-                    self.context.visuals.draw_history_point_add_point(target_x, target_y)
+                # These methods no longer exist in Visuals, comment them out or remove them
+                # if cfg.show_target_line:
+                #     self.context.visuals.draw_target_line(target_x, target_y, target_cls)
+                # if cfg.show_target_prediction_line and not self.disable_prediction:
+                #     predicted_x, predicted_y = self.predict_target_position(target_x, target_y, time.time())
+                #     self.context.visuals.draw_predicted_position(predicted_x, predicted_y, target_cls)
+                # if cfg.show_history_points:
+                #     self.context.visuals.draw_history_point_add_point(target_x, target_y)
+
 
             self.bscope = (self.check_target_in_scope(target_x, target_y, target_w, target_h, self.bscope_multiplier)
                            if (cfg.auto_shoot or cfg.triggerbot) else False)
@@ -263,7 +264,7 @@ class MouseThread:
             log_error("Error checking shooting key state: {exc}")
         return False
 
-    def check_target_in_scope(self, target_x, target_y, target_w, target_h, reduction_factor):
+def check_target_in_scope(self, target_x, target_y, target_w, target_h, reduction_factor):
         """
         Determine if the target is within a reduced bounding box (scope) on the screen.
         Draw the box if the configuration option is enabled.
@@ -274,6 +275,7 @@ class MouseThread:
         y1, y2 = target_y - reduced_h, target_y + reduced_h
         bscope = (self.center_x > x1 and self.center_x < x2 and
                   self.center_y > y1 and self.center_y < y2)
-        if cfg.show_window and cfg.show_bscope_box:
-            self.context.draw_bscope(x1, x2, y1, y2, bscope)
+        # This method no longer exists in Visuals, comment it out or remove it
+        # if cfg.show_window and cfg.show_bscope_box:
+        #     self.context.draw_bscope(x1, x2, y1, y2, bscope)
         return bscope

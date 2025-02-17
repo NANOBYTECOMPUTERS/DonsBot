@@ -102,7 +102,6 @@ def draw_trajectory(image, detections):
             cv2.arrowedLine(image, p0, p1, ARROW_COLOR, 2)
 
 def run_bot(context):
-    """Main bot execution loop"""
     run_checks()
 
     try:
@@ -116,24 +115,25 @@ def run_bot(context):
         try:
             image = context.capture.get_new_frame()
             if image is not None:
-                # Show visuals if required
                 if cfg.show_window or cfg.show_overlay:
-                    context.visuals.queue.put(image)
+                    context.visuals.queue.put((image, sv.Detections.empty()))  # Default to empty detections if needed
 
-                # Skip detection if the app is paused to save processing time.
                 if context.hotkeys_watcher.app_pause != 0:
-                    time.sleep(0.5)  # A bit longer sleep while paused.
+                    time.sleep(0.5)
                     continue
 
                 result = perform_detection(model, image)
-                if result is not None:
-                    context.frame_parser.parse(result)
-                    if (cfg.show_window or cfg.show_overlay) and cfg.show_trajectory:
-                        draw_trajectory(image, result)
-                else:
-                    context.frame_parser.parse(sv.Detections.empty())
+                if result is None:
+                    result = sv.Detections.empty()  # Provide a default empty detection if None
+
+                context.frame_parser.parse(result)
+                if cfg.show_window or cfg.show_overlay:
+                    context.visuals.queue.put((image, result))
+                    context.overlay.queue.put((image, result))
+
+                if (cfg.show_window or cfg.show_overlay) and cfg.show_trajectory:
+                    draw_trajectory(image, result)
             else:
-                # Increase sleep time a little to avoid a tight loop when no frame is available.
                 time.sleep(0.08)
         except Exception as e:
             log_error("Error in main loop", e)

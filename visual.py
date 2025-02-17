@@ -1,5 +1,3 @@
-# visuals.py ---
-
 import queue
 import threading
 import time
@@ -12,6 +10,7 @@ import numpy as np
 from config_watcher import cfg
 from buttons import Buttons
 from utils import log_error
+import supervision as sv
 
 SCREENSHOT_DIRECTORY = "screenshots"
 CIRCLE_RADIUS = 5
@@ -64,6 +63,20 @@ class Visuals(threading.Thread):
             self.editing_mask = False
             self.mask_points = self.context.capture.mask_points.copy()
             self.selected_point = None
+            self.bounding_box_annotator = sv.BoxAnnotator(
+                color=sv.ColorPalette.DEFAULT,
+                thickness=2,
+                color_lookup=sv.ColorLookup.CLASS
+            )
+            self.label_annotator = sv.LabelAnnotator(
+                color=sv.ColorPalette.DEFAULT,
+                text_color=sv.Color.WHITE,
+                text_scale=0.5,
+                text_thickness=1,
+                text_padding=5,
+                text_position=sv.Position.TOP_LEFT,
+                color_lookup=sv.ColorLookup.CLASS
+            )
             self.start()
 
     def run(self):
@@ -71,17 +84,43 @@ class Visuals(threading.Thread):
             self.spawn_debug_window()
         while self.running:
             try:
-                self.image = self.queue.get(timeout=0.2)
+                item = self.queue.get(timeout=0.2)
+                if item is None:
+                    log_error("Received None in visuals queue, continuing")
+                    continue
+                if isinstance(item, tuple) and len(item) == 2:
+                    image, detections = item
+                else:
+                    log_error(f"Warning: Unexpected item format in visuals queue: {type(item)} - {item}")
+                    image = item if not isinstance(item, tuple) else item[0]
+                    detections = sv.Detections.empty() if hasattr(sv, 'Detections') else None
+                
+                if image is None:
+                    self.running = False
+                    break
+
+                if not hasattr(image, "shape"):
+                    log_error("Invalid image received in visuals queue")
+                    continue
+                self.image = image
+                self.handle_screenshot()
+                if self.show_window or self.show_overlay:
+                    self.display_image(detections if detections is not None else sv.Detections.empty())
             except queue.Empty:
                 continue
-            if self.image is None:
-                self.running = False
-                break
+            except Exception as e:
+                log_error("Error in Visuals run loop", e)
 
-            if not hasattr(self.image, "shape"):
-                continue
-            self.handle_screenshot()
-            self.display_image()
+    def display_image(self, detections):
+        if self.show_window:
+            display_img = self.image.copy()
+            if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
+                display_img = self.resize_image(display_img)
+
+            if cfg.show_boxes:
+                annotated_img = self.annotate_with_supervision(detections, display_img)
+            else:
+                annotated_img = display_img
 
     def mouse_callback(self, event, x, y, flags, param):
         if not self.show_window:
@@ -105,25 +144,28 @@ class Visuals(threading.Thread):
             self.context.capture.save_mask_points(self.mask_points)
             log_error("Mask points saved")
 
-    def display_image(self):
+    def display_image(self, detections):
         if self.show_window:
             display_img = self.image.copy()
             if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
                 display_img = self.resize_image(display_img)
 
+            # Annotate image with supervision detections
+            annotated_img = self.annotate_with_supervision(detections, display_img)
+
             # Draw mask points and lines if editing or points exist
             if self.editing_mask or len(self.mask_points) > 0:
                 points = np.array(self.mask_points, dtype=np.int32)
-                cv2.polylines(display_img, [points], True, (0, 255, 0), 2)
+                cv2.polylines(annotated_img, [points], True, (0, 255, 0), 2)
                 for i, point in enumerate(self.mask_points):
                     px, py = point
                     if isinstance(px, (int, float)) and isinstance(py, (int, float)):
-                        cv2.circle(display_img, (int(px), int(py)), 5, (0, 0, 255), -1)
-                        cv2.putText(display_img, str(i), (int(px) + 10, int(py) - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                        cv2.circle(annotated_img, (int(px), int(py)), 5, (0, 0, 255), -1)
+                        cv2.putText(annotated_img, str(i), (int(px) + 10, int(py) - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
                     else:
                         log_error(f"Invalid point at index {i}: {point}")
 
-            cv2.imshow(getattr(cfg, "debug_window_name", "Debug Window"), display_img)
+            cv2.imshow(getattr(cfg, "debug_window_name", "Debug Window"), annotated_img)
             if self.show_window:
                 cv2.setMouseCallback(getattr(cfg, "debug_window_name", "Debug Window"), self.mouse_callback)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -188,29 +230,21 @@ class Visuals(threading.Thread):
         cv2.destroyAllWindows()
         cv2.waitKey(1)
 
-    def draw_target_line(self, target_x, target_y, target_cls):
-        if target_cls not in self.disabled_line_classes:
-            self.draw_line_data = (target_x, target_y)
-
-    def draw_predicted_position(self, target_x, target_y, target_cls):
-        if target_cls not in self.disabled_line_classes:
-            self.draw_predicted_position_data = (target_x, target_y)
-
-    def draw_speed(self, speed_preprocess, speed_inference, speed_postprocess):
-        self.draw_speed_data = (speed_preprocess, speed_inference, speed_postprocess)
-
-    def draw_bscope(self, x1, x2, y1, y2, bscope):
-        self.draw_bscope_data = (x1, x2, y1, y2, bscope)
-
-    def draw_history_point_add_point(self, x, y):
-        self.draw_history_point_data.append([int(x), int(y)])
-
-    def clear(self):
-        self.draw_line_data = None
-        self.draw_predicted_position_data = None
-        self.draw_speed_data = None
-        self.draw_bscope_data = None
-        self.draw_history_point_data = []
+    def annotate_with_supervision(self, detections, image):
+        if cfg.show_boxes:
+            annotated_image = self.bounding_box_annotator.annotate(
+                scene=image,
+                detections=detections
+            )
+            if cfg.show_labels or cfg.show_conf:
+                labels = [f"{self.cls_model_data.get(cls, 'Unknown')} {conf:.2f}" for cls, conf in zip(detections.class_id, detections.confidence)]
+                annotated_image = self.label_annotator.annotate(
+                    scene=annotated_image,
+                    detections=detections,
+                    labels=labels
+                )
+            return annotated_image
+        return image
 
     def draw_aim_point(self, x, y):
         if self.show_window and self.image is not None:

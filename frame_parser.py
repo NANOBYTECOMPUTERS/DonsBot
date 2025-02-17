@@ -186,36 +186,10 @@ class FrameParser:
         self.previous_target = new_target
 
     def _annotate_frame(self, frame):
-        if cfg.show_window or cfg.show_overlay:
-            if cfg.show_boxes or cfg.overlay_show_boxes:
-                self._draw_boxes_and_info(frame)
-            if cfg.show_window and cfg.show_detection_speed:
-                self.context.visuals.draw_speed(0, 0, 0)
-        if frame.xyxy.size == 0 and (cfg.auto_shoot or cfg.triggerbot):
-            self.context.shooting.shoot(False, False)
+        pass
 
     def _draw_boxes_and_info(self, frame):
-        if cfg.show_window:
-            labels = [
-                f"{self.cls_model_data.get(cls, 'Unknown')}\nConf: {conf:.2f}\nID: {id}"
-                for cls, conf, id in zip(frame.class_id, frame.confidence, frame.tracker_id)
-            ]
-            annotated_image = self.bounding_box_annotator.annotate(
-                scene=self.context.visuals.image,
-                detections=frame
-            )
-            annotated_image = self.label_annotator.annotate(
-                scene=annotated_image,
-                detections=frame,
-                labels=labels
-            )
-            self.context.visuals.queue.put(annotated_image)
-        if cfg.show_overlay:
-            for box, cls, conf, id in zip(frame.xyxy, frame.class_id, frame.confidence, frame.tracker_id):
-                text = f"{self.cls_model_data.get(cls, 'Unknown')}\nConf: {conf:.2f}\nID: {id}"
-                self.context.overlay.draw_text(box[0], box[1] - 15, text, 12, 'white')
-                self.context.overlay._draw_square(box[0], box[1], box[2], box[3], 'green', 2)
-
+        pass
 
     def sort_targets(self, frame):
         # Validate input structure early
