@@ -1,5 +1,14 @@
 # run.py ---
-
+import faber
+import torch
+from ultralytics import YOLO
+import supervision as sv
+import cv2
+import numpy as np
+from config_watcher import cfg
+from init import get_app_context
+from checks import run_checks
+from utils import log_error
 import os
 import time
 import sys
@@ -77,7 +86,7 @@ def perform_detection(model, image):
         half=True,
         max_det=MAX_DETECTIONS,
         agnostic_nms=False,
-        augment=True,
+        augment=False,
         vid_stride=False,
         visualize=False,
         verbose=True,

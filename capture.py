@@ -71,7 +71,7 @@ class Capture(threading.Thread):
         ]
     
     def _create_mask_from_points(self, points):
-        """Create a white mask with black polygon area (inverted logic)"""
+        """Create a white mask with black polygon area to cover the player"""
         height = int(cfg.detection_window_height)
         width = int(cfg.detection_window_width)
         mask = np.ones((height, width), dtype=np.uint8) * 255  # White background
@@ -132,7 +132,7 @@ class Capture(threading.Thread):
         self.capture_method = "obs"
     
     def capture_frame(self):
-        """Capture a single frame and apply the pre-created custom polygon mask"""
+        """Capture a single frame and apply the pre-created custom polygon mask to hide player"""
         frame = None
         if self.capture_method == "bettercam":
             frame = self.bc.get_latest_frame()
@@ -150,10 +150,8 @@ class Capture(threading.Thread):
             if frame.shape[2] == 4:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             if frame.shape[:2] == self.custom_mask.shape:
-                # Use OpenCV bitwise operation to apply the mask efficiently
-                # Invert the mask so that the polygon area (originally black, 0) becomes 255 and vice-versa.
-                inv_mask = cv2.bitwise_not(self.custom_mask)
-                frame = cv2.bitwise_and(frame, frame, mask=inv_mask)
+                # Use OpenCV bitwise operation to apply the mask
+                frame = cv2.bitwise_and(frame, frame, mask=self.custom_mask)
             else:
                 log_error(f"Frame dimensions {frame.shape[:2]} do not match mask dimensions {self.custom_mask.shape}")
         return frame

@@ -153,10 +153,10 @@ class Visuals(threading.Thread):
             # Annotate image with supervision detections
             annotated_img = self.annotate_with_supervision(detections, display_img)
 
-            # Draw mask points and lines if editing or points exist
             if self.editing_mask or len(self.mask_points) > 0:
                 points = np.array(self.mask_points, dtype=np.int32)
-                cv2.polylines(annotated_img, [points], True, (0, 255, 0), 2)
+                cv2.polylines(display_img, [points], True, (0, 255, 0), 2)  # Green for visibility
+                cv2.fillPoly(display_img, [points], (0, 0, 0, 128))  # Semi-transparent black to show the area that will be hidden
                 for i, point in enumerate(self.mask_points):
                     px, py = point
                     if isinstance(px, (int, float)) and isinstance(py, (int, float)):

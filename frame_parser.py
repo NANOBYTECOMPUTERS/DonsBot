@@ -10,13 +10,13 @@ from utils import get_torch_device, log_error
 HEADSHOT_CLASS = 7
 DEFAULT_COLOR = sv.ColorPalette.DEFAULT
 DEFAULT_TEXT_COLOR = sv.Color.WHITE
-DEFAULT_TEXT_SCALE = 0.5
+DEFAULT_TEXT_SCALE = 0.3
 DEFAULT_TEXT_THICKNESS = 1
 DEFAULT_TEXT_PADDING = 5
 DEFAULT_TEXT_POSITION = sv.Position.TOP_LEFT
-HEADSHOT_WEIGHT = 0.1  # Reduced to prioritize headshots
+HEADSHOT_WEIGHT = 0.8  # Reduced to prioritize headshots
 NON_HEADSHOT_WEIGHT = 1.0
-MIN_DETECTIONS_FOR_CUDA = 2
+MIN_DETECTIONS_FOR_CUDA = 5
 
 class Target:
     def __init__(self, x1, y1, x2, y2, cls, id=None):
