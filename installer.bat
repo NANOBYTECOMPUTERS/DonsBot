@@ -37,14 +37,96 @@ set REG_VALUE_DATA=SwapEffectUpgradeEnable=0;GpuPreference=1;
 
 reg add "%REG_PATH%" /v "%REG_VALUE_NAME%" /t REG_SZ /d "%REG_VALUE_DATA%" /f
 
-:: Download CUDA Toolkit
-echo Downloading CUDA Toolkit...
-powershell -Command "Invoke-WebRequest -Uri 'https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe' -OutFile 'temp\cuda_12.6.0_560.76_windows.exe'"
+echo Downloading CUDA Toolkit online installer...
+curl -o cuda_12.8.0_windows_network.exe https://developer.download.nvidia.com/compute/cuda/12.8.0/network_installers/cuda_12.8.0_windows_network.exe
+echo Download complete. Starting installation...
+cuda_12.8.0_windows_network.exe
+pause
+echo Press any key when finished with CUDA installation...
+pause
 
-:: Install CUDA Toolkit silently
-echo Installing CUDA Toolkit...
-start /wait temp\cuda_12.6.0_560.76_windows.exe -s
 
+:: Installing pip modules
+
+echo Now we will install python modules and fix the bugs it makes.
+REM Generate list of installed packages
+pip freeze > list.txt
+if %ERRORLEVEL% NEQ 0 (
+    echo Error generating package list!
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+REM Uninstall all packages from the list
+pip uninstall -r list.txt -y
+if %ERRORLEVEL% NEQ 0 (
+    echo Error uninstalling packages!
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+REM Purge pip cache
+pip cache purge
+if %ERRORLEVEL% NEQ 0 (
+    echo Error purging cache!
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+REM Install PyTorch and related packages
+pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
+if %ERRORLEVEL% NEQ 0 (
+    echo Error installing PyTorch packages!
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+REM Install packages from requirements.txt if it exists
+if exist requirements.txt (
+    pip install -r requirements.txt
+    if %ERRORLEVEL% NEQ 0 (
+        echo Error installing from requirements.txt!
+        pause
+        exit /b %ERRORLEVEL%
+    )
+) else (
+    echo requirements.txt not found, skipping...
+)
+
+REM Reinstall opencv-contrib-python and reinstall again
+echo Fix the openCV issues inference made  ¯\_(ツ)_/¯ ...
+pip uninstall opencv-contrib-python -y
+if %ERRORLEVEL% NEQ 0 (
+    echo Error uninstalling opencv-contrib-python!
+    pause
+    exit /b %ERRORLEVEL%
+)
+echo uninstalling open-cv the inference package is on the pipe (•ˋ _ ˊ•)...
+pip uninstall opencv-python -y
+if %ERRORLEVEL% NEQ 0 (
+    echo Error uninstalling opencv-contrib-python!
+    pause
+    exit /b %ERRORLEVEL%
+)
+pip install opencv-contrib-python==4.11.0.86 --no-cache-dir --force-reinstall --verbose
+if %ERRORLEVEL% NEQ 0 (
+    echo Error installing opencv-contrib-python!
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+REM Fix a compatibility issue we just made by installing specific numpy version
+echo Installing numpy 2.1.0 for compatibility fix (ง'̀-'́)ง ...
+pip install numpy==2.1.0 --no-cache-dir --force-reinstall
+if %ERRORLEVEL% NEQ 0 (
+    echo Error installing numpy!
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+
+echo Setup complete completed successfully ✺◟(＾∇＾)◞✺!
+pause
 
 echo Setup complete.
 endlocal
