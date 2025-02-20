@@ -12,7 +12,13 @@ It leverages the YOLOV11 models, PyTorch, and various other tools to automatical
 > [!First_Run]
 > if you are having issues and have python, cuda, and tensorrt installed run the fixissues.bat in the folder it will fix the issues you are having.
 
-
+>F2 is to quit
+>F3 is to pause
+>F5 is to open settings window (note the restart feature is not working I will fix when I get time and remember)
+>Right Mouse Button is the default aim key
+>
+> to use razer mouse you will need a razer brand mouse and synapse with the macro module installed inside of it.
+>To use Ghub mouse you will need the proper Logitech Ghub installed and add your game in the logitech program settings.
                 
 
 
@@ -34,14 +40,15 @@ It leverages the YOLOV11 models, PyTorch, and various other tools to automatical
 - Use the F3 key to pause the aimbot and F2 to wuit.
 - export to `.engine`.
 - Turn off the debug window.
-- Do not use the `--half` option, it will not improve performance.
 - Do not increase the object search window resolution, this may affect your search speed.
-- If you have started the application and nothing happens, it may be working, close it with the F2 key and change the `show_window` option to `True` in the file [config.ini](https://github.com/SunOner/sunone_aimbot/blob/main/config.ini) to make sure that the application is working.
+- If you have started the application and nothing happens, it may be working, close it with the F2 key and change the `show_window` option to `True` in the file [config.ini]
 
 ## Support the project
 [cashapp] $DonArrington
 
-# For Sunones Models
+
+
+# For Sunones Models see his project page or visit his boosty page
 [Boosty](https://boosty.to/sunone)
 
 ## License
