@@ -1,3 +1,4 @@
+#hotkeys_watcher.py ---
 import os
 import threading
 import cv2

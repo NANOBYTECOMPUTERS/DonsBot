@@ -78,7 +78,8 @@ class MouseThread:
         self.min_speed_multiplier = cfg.mouse_min_speed_multiplier
         self.max_speed_multiplier = cfg.mouse_max_speed_multiplier
         self.bscope = False
-
+        self.deg_per_pixel_x = self.fov_x / self.screen_width
+        self.deg_per_pixel_y = self.fov_y / self.screen_height
         # Precompute values that do not change often
         self.update_settings()
 
@@ -123,9 +124,7 @@ class MouseThread:
             self.center_x = self.screen_width / 2.0
             self.center_y = self.screen_height / 2.0
 
-            # Precompute per-pixel degrees
-            self.deg_per_pixel_x = self.fov_x / self.screen_width
-            self.deg_per_pixel_y = self.fov_y / self.screen_height
+
         except Exception as exc:
             log_error("Error updating settings: {exc}")
 
@@ -182,36 +181,20 @@ class MouseThread:
             log_error("Error in process_data", e)  # Fixed logging
 
     def predict_target_position(self, target_x, target_y, current_time):
-        """
-        Predict future target position based on previous positions using basic
-        kinematic equations: s = s0 + vt + (1/2)at^2.
-        """
-        if self.prev_time is None or self.prev_position is None or self.prev_velocity is None:
+        if self.prev_time is None or self.prev_position is None:
             self.prev_position = (target_x, target_y)
-            self.prev_velocity = (0.0, 0.0)
             self.prev_time = current_time
             return target_x, target_y
-
         delta_time = current_time - self.prev_time
         if delta_time == 0:
             return target_x, target_y
-
-        curr_pos = (target_x, target_y)
-        velocity = (
-            (curr_pos[0] - self.prev_position[0]) / delta_time,
-            (curr_pos[1] - self.prev_position[1]) / delta_time,
-        )
-        acceleration = (
-            (velocity[0] - self.prev_velocity[0]) / delta_time,
-            (velocity[1] - self.prev_velocity[1]) / delta_time,
-        )
-        pred_int = delta_time * self.prediction_interval
-        predicted_x = curr_pos[0] + velocity[0] * pred_int + 0.5 * acceleration[0] * (pred_int ** 2)
-        predicted_y = curr_pos[1] + velocity[1] * pred_int + 0.5 * acceleration[1] * (pred_int ** 2)
-        self.prev_position = curr_pos
-        self.prev_velocity = velocity
+        velocity_x = (target_x - self.prev_position[0]) / delta_time
+        velocity_y = (target_y - self.prev_position[1]) / delta_time
+        pred_x = target_x + velocity_x * self.prediction_interval
+        pred_y = target_y + velocity_y * self.prediction_interval
+        self.prev_position = (target_x, target_y)
         self.prev_time = current_time
-        return predicted_x, predicted_y
+        return pred_x, pred_y
 
     def calculate_speed_multiplier(self, distance):
         """Calculate a speed multiplier based on the distance to target."""
@@ -232,24 +215,20 @@ class MouseThread:
         move_x = (mouse_move_x / 360) * (self.dpi / self.mouse_sensitivity) * speed_multiplier
         move_y = (mouse_move_y / 360) * (self.dpi / self.mouse_sensitivity) * speed_multiplier
         return move_x, move_y
-
+    
     def move_mouse(self, x, y, shooting_key_state):
-        """Move the mouse cursor based on computed values and system settings."""
-        x = x or 0
-        y = y or 0
-        try:
-            if x != 0 or y != 0:
-                if (shooting_key_state and not cfg.mouse_auto_aim and not cfg.triggerbot) or cfg.mouse_auto_aim:
-                    if not cfg.mouse_ghub and not cfg.arduino_move and not cfg.mouse_rzr:
-                        win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(x), int(y), 0, 0)
-                    elif cfg.mouse_ghub and not cfg.arduino_move and not cfg.mouse_rzr:
-                        self.ghub.mouse_xy(int(x), int(y))
-                    elif cfg.mouse_rzr:
-                        self.rzr.mouse_move(int(x), int(y), True)
-                    elif cfg.arduino_move:
-                        arduino.move(int(x), int(y))
-        except Exception as exc:
-            log_error("Error in move_mouse: {exc}")
+        x, y = x or 0, y or 0
+        if x == 0 and y == 0:
+            return
+        if (shooting_key_state and not cfg.mouse_auto_aim and not cfg.triggerbot) or cfg.mouse_auto_aim:
+            if cfg.mouse_rzr:
+                self.rzr.mouse_move(int(x), int(y), True)
+            elif cfg.mouse_ghub:
+                self.ghub.mouse_xy(int(x), int(y))
+            elif cfg.arduino_move:
+                arduino.move(int(x), int(y))
+            else:
+                win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(x), int(y), 0, 0)
 
     def get_shooting_key_state(self):
         """Check and return whether any of the configured hotkeys are pressed."""

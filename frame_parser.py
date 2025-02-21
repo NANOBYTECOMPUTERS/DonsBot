@@ -1,3 +1,4 @@
+#frame_parser.py
 import math
 import numpy as np
 import torch
@@ -53,7 +54,7 @@ def _find_nearest_target_cuda(boxes_array, classes_array, ids_array, center, wei
         old = cuda.atomic.min(result, 0, distance_sq)
         if distance_sq < old:
             result[1] = ids_array[idx]
-
+    
 class FrameParser:
     def __init__(self, context):
         self.context = context
@@ -192,28 +193,32 @@ class FrameParser:
         pass
 
     def sort_targets(self, frame):
-        # Validate input structure early
-        if hasattr(frame, "xyxy") and hasattr(frame, "class_id"):
-            if isinstance(frame, sv.Detections):
-                boxes_array, classes_array, ids_array = self._convert_sv_to_numpy(frame)
-                confidence_array = frame.confidence
-            else:
-                if not (hasattr(frame, "boxes") and hasattr(frame.boxes, "xywh") and hasattr(frame.boxes, "cls")):
-                    return None
-                boxes_array = np.ascontiguousarray(frame.boxes.xywh.cpu().numpy())
-                classes_array = np.ascontiguousarray(frame.boxes.cls.cpu().numpy())
-                confidence_array = frame.boxes.conf.cpu().numpy()
-                ids_array = np.ascontiguousarray(
-                    frame.boxes.id.cpu().numpy() if frame.boxes.id is not None 
-                    else np.zeros_like(classes_array)
-                )
-        else:
+        # Validate the input structure early.
+        if not (hasattr(frame, "xyxy") or (hasattr(frame, "boxes") and hasattr(frame.boxes, "xywh"))):
             return None
 
+        if isinstance(frame, sv.Detections):
+            boxes_array, classes_array, ids_array = self._convert_sv_to_numpy(frame)
+            confidence_array = frame.confidence
+        else:
+            # Ensure minimal conversions. If arrays are already contiguous and in GPU-usable format, avoid extra work.
+            boxes_array = frame.boxes.xywh.cpu().numpy()
+            classes_array = frame.boxes.cls.cpu().numpy()
+            confidence_array = frame.boxes.conf.cpu().numpy()
+            ids_array = (frame.boxes.id.cpu().numpy() if frame.boxes.id is not None
+                         else np.zeros_like(classes_array))
+        # Only force contiguous and proper type if needed.
+        if not boxes_array.flags['C_CONTIGUOUS'] or boxes_array.dtype != np.float32:
+            boxes_array = np.ascontiguousarray(boxes_array.astype(np.float32))
+        if not classes_array.flags['C_CONTIGUOUS'] or classes_array.dtype != np.float32:
+            classes_array = np.ascontiguousarray(classes_array.astype(np.float32))
+        if not ids_array.flags['C_CONTIGUOUS'] or ids_array.dtype != np.float32:
+            ids_array = np.ascontiguousarray(ids_array.astype(np.float32))
+            
         if classes_array.size == 0:
             return None
 
-        # If number of detections is small, use CPU path to avoid overhead
+        # Decide CPU vs. CUDA based on detection count.
         if boxes_array.shape[0] < MIN_DETECTIONS_FOR_CUDA:
             weights = np.ones(boxes_array.shape[0], dtype=np.float32)
             if not cfg.disable_headshot:
@@ -224,17 +229,12 @@ class FrameParser:
                 weights *= (1 + confidence_array)
             return self._find_nearest_target_cpu(boxes_array, classes_array, ids_array, weights)
 
-        # Compute weight vector once and reuse it in the CUDA call
+        # Compute weight vector once and reuse it in the CUDA call.
         weights = np.ones(boxes_array.shape[0], dtype=np.float32)
         if not cfg.disable_headshot:
             weights[classes_array != HEADSHOT_CLASS] = HEADSHOT_WEIGHT
         else:
             weights[classes_array == HEADSHOT_CLASS] = NON_HEADSHOT_WEIGHT
-
-        # Ensure correct data types and contiguity
-        boxes_array = np.ascontiguousarray(boxes_array.astype(np.float32))
-        classes_array = np.ascontiguousarray(classes_array.astype(np.float32))
-        ids_array = np.ascontiguousarray(ids_array.astype(np.float32))
         weights = np.ascontiguousarray(weights)
 
         return self._find_nearest_target_cuda_wrapper(boxes_array, classes_array, ids_array, weights)
@@ -246,35 +246,28 @@ class FrameParser:
             (xyxy[:, 1] + xyxy[:, 3]) / 2,
             xyxy[:, 2] - xyxy[:, 0],
             xyxy[:, 3] - xyxy[:, 1]
-        ])
+        ]).astype(np.float32)
         classes_array = frame.class_id.astype(np.float32)
-        ids_array = frame.tracker_id.astype(np.int32) if frame.tracker_id is not None else np.zeros_like(classes_array)
+        ids_array = (frame.tracker_id.astype(np.int32) 
+                     if frame.tracker_id is not None else np.zeros_like(classes_array))
         return xywh, classes_array, ids_array
 
     def _find_nearest_target_cuda_wrapper(self, boxes_array, classes_array, ids_array, weights):
         center = np.array([self.screen_width / 2, self.screen_height / 2], dtype=np.float32)
-
-        d_boxes = cuda.to_device(boxes_array)
-        d_classes = cuda.to_device(classes_array)
-        d_ids = cuda.to_device(ids_array)
-        d_center = cuda.to_device(center)
-        d_weights = cuda.to_device(weights)
-
-        init_result = np.array([np.inf, -1], dtype=np.float32)
-        d_result = cuda.to_device(init_result)
-
-        threadsperblock = min(1024, boxes_array.shape[0])
-        blockspergrid = (boxes_array.shape[0] + threadsperblock - 1) // threadsperblock
-
-        try:
+        with cuda.pinned(boxes_array, classes_array, ids_array, weights, center):
+            d_boxes = cuda.to_device(boxes_array)
+            d_classes = cuda.to_device(classes_array)
+            d_ids = cuda.to_device(ids_array)
+            d_center = cuda.to_device(center)
+            d_weights = cuda.to_device(weights)
+            d_result = cuda.to_device(np.array([np.inf, -1], dtype=np.float32))
+            threadsperblock = min(1024, boxes_array.shape[0])
+            blockspergrid = (boxes_array.shape[0] + threadsperblock - 1) // threadsperblock
             _find_nearest_target_cuda[blockspergrid, threadsperblock](
                 d_boxes, d_classes, d_ids, d_center, d_weights, (not cfg.disable_headshot), d_result
             )
             result = d_result.copy_to_host()
-        except CudaDriverError as e:
-            log_error("CUDA error in target selection", e)
             return self._find_nearest_target_cpu(boxes_array, classes_array, ids_array, weights)
-
         if result[0] == np.inf:
             if ids_array.size > 0:
                 first_detection = (
@@ -287,7 +280,6 @@ class FrameParser:
                 )
                 return Target(*first_detection)
             return None
-
         nearest_id = int(result[1])
         nearest_idx = np.where(ids_array == nearest_id)[0][0]
         target_info = (
@@ -301,28 +293,18 @@ class FrameParser:
         return Target(*target_info)
 
     def _find_nearest_target_cpu(self, boxes_array, classes_array, ids_array, weights):
-        center = np.array([self.screen_width / 2, self.screen_height / 2], dtype=np.float32)
-        cx = boxes_array[:, 0] + boxes_array[:, 2] / 2.0
-        cy = boxes_array[:, 1] + boxes_array[:, 3] / 2.0
-        dx = cx - center[0]
-        dy = cy - center[1]
-        distance_sq = dx ** 2 + dy ** 2
-
-        if not cfg.disable_headshot:
-            distance_sq = np.where(classes_array == HEADSHOT_CLASS, distance_sq * HEADSHOT_WEIGHT, distance_sq * NON_HEADSHOT_WEIGHT)
-        else:
-            area = boxes_array[:, 2] * boxes_array[:, 3]
-            distance_sq = np.where(area > 0, distance_sq / area, distance_sq)
-
-        best_index = np.argmin(distance_sq)
-        if distance_sq[best_index] == np.inf:
+        center = np.array([self.screen_width / 2, self.screen_height / 2])
+        cx = boxes_array[:, 0] + boxes_array[:, 2] / 2
+        cy = boxes_array[:, 1] + boxes_array[:, 3] / 2
+        distances = np.hypot(cx - center[0], cy - center[1]) * weights
+        best_idx = np.argmin(distances)
+        if distances[best_idx] == np.inf:
             return None
-        target_info = (
-            boxes_array[best_index, 0],
-            boxes_array[best_index, 1],
-            boxes_array[best_index, 0] + boxes_array[best_index, 2],
-            boxes_array[best_index, 1] + boxes_array[best_index, 3],
-            classes_array[best_index],
-            ids_array[best_index]
+        return Target(
+            boxes_array[best_idx, 0],
+            boxes_array[best_idx, 1],
+            boxes_array[best_idx, 0] + boxes_array[best_idx, 2],
+            boxes_array[best_idx, 1] + boxes_array[best_idx, 3],
+            classes_array[best_idx],
+            ids_array[best_idx]
         )
-        return Target(*target_info)

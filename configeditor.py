@@ -1,4 +1,4 @@
-# configeditor.py
+# configeditor.py ---
 import tkinter as tk
 import os
 from tkinter import ttk

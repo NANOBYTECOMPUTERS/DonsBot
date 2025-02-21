@@ -3,6 +3,7 @@
 import os
 import queue
 import threading
+import time
 
 import win32api
 import win32con
@@ -40,18 +41,20 @@ class Shooting(threading.Thread):
     def run(self):
         while True:
             bscope, shooting_state = self.queue.get()
+            while not self.queue.empty():
+                bscope, shooting_state = self.queue.get()  # Process latest state
             self.shoot(bscope, shooting_state)
-
+            
     def shoot(self, bscope, shooting_state):
         auto_shoot_active = cfg.auto_shoot and bscope
         triggerbot_active = cfg.triggerbot
-
         should_shoot = auto_shoot_active or (cfg.mouse_auto_aim and bscope)
-
         if should_shoot and not self.button_pressed:
             self._press_button()
+            time.sleep(0.01)  # Debounce
         elif (not bscope or (not shooting_state and not triggerbot_active)) and self.button_pressed:
             self._release_button()
+            time.sleep(0.01)  # Debounce
 
     def _press_button(self):
         if cfg.mouse_rzr:

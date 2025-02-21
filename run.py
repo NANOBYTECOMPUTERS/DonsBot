@@ -1,27 +1,19 @@
 # run.py ---
-import faber
-import torch
-from ultralytics import YOLO
-import supervision as sv
-import cv2
-import numpy as np
-from config_watcher import cfg
-from init import get_app_context
-from checks import run_checks
-from utils import log_error
 import os
 import time
 import sys
 import subprocess
 import torch
+import cv2
 from ultralytics import YOLO
 import supervision as sv
-import cv2
 import numpy as np
 from config_watcher import cfg
 from init import get_app_context
 from checks import run_checks
 from utils import log_error
+from threading import Lock
+PADDING_CACHE_LOCK = Lock()
 
 IOU_THRESHOLD = 0.7
 MAX_DETECTIONS = 20
@@ -44,56 +36,36 @@ class Tracker:
 
 tracker = Tracker()
 
+
 def pad_to_alignment(arr, alignment=ALIGNMENT):
-    """
-    Pad an image array so that its dimensions are multiples of a given alignment.
-    Uses a global cache to store the padded dimensions for images with identical shapes.
-    """
     key = (arr.shape[0], arr.shape[1], arr.shape[2])
-    if key in PADDING_CACHE:
+    with PADDING_CACHE_LOCK:
+        if key not in PADDING_CACHE:
+            new_height = ((arr.shape[0] + alignment - 1) // alignment) * alignment
+            new_width = ((arr.shape[1] + alignment - 1) // alignment) * alignment
+            PADDING_CACHE[key] = (new_height, new_width)
         new_height, new_width = PADDING_CACHE[key]
-    else:
-        new_height = ((arr.shape[0] + alignment - 1) // alignment) * alignment
-        new_width = ((arr.shape[1] + alignment - 1) // alignment) * alignment
-        PADDING_CACHE[key] = (new_height, new_width)
-    padded_arr = np.zeros((new_height, new_width, arr.shape[2]), dtype=arr.dtype)
-    padded_arr[:arr.shape[0], :arr.shape[1], :] = arr
-    return padded_arr
+    return np.pad(arr, ((0, new_height - arr.shape[0]), (0, new_width - arr.shape[1]), (0, 0)), mode='constant')
 
 @torch.inference_mode()
-def perform_detection(model, image):
-    """
-    Perform detection on the given image using the provided model.
-    """
-    # Ensure image is contiguous; if it already is contiguous, this is still a lightweight call.
-    image_np = np.ascontiguousarray(image)
-
+def perform_detection(model, images):
+    if isinstance(images, np.ndarray):  # Single image
+        images = [images]
+    images_np = [np.ascontiguousarray(img) for img in images]
     if cfg.use_padding:
-        image_np = pad_to_alignment(image_np)
-
-    if image_np.shape[2] == 4:
-        image_np = cv2.cvtColor(image_np, cv2.COLOR_BGRA2BGR)
-
+        images_np = [pad_to_alignment(img) for img in images_np]
     results = model.predict(
-        source=image_np,
+        source=images_np,
         imgsz=cfg.ai_model_image_size,
         stream=True,
         conf=cfg.ai_conf,
         iou=IOU_THRESHOLD,
         device=cfg.ai_device,
-        save=False,
-        show=False,
         half=True,
         max_det=MAX_DETECTIONS,
-        agnostic_nms=False,
-        augment=False,
-        vid_stride=False,
-        visualize=False,
-        verbose=True,
-        show_boxes=False,
-        show_labels=False,
-        show_conf=False
+        verbose=True
     )
+    
     # Process only the first detection (assuming it is the desired behavior)
     for result in results:
         detections = sv.Detections.from_ultralytics(result)
@@ -101,6 +73,7 @@ def perform_detection(model, image):
         if tracked_detections is not None:
             return tracked_detections
     return sv.Detections.empty()
+    
 
 def draw_trajectory(image, detections):
     for track in detections.tracks:
@@ -179,4 +152,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+        main()

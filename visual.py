@@ -1,3 +1,4 @@
+#visual.py ---
 import queue
 import threading
 import time
@@ -84,30 +85,17 @@ class Visuals(threading.Thread):
             self.spawn_debug_window()
         while self.running:
             try:
-                item = self.queue.get(timeout=0.2)
+                item = self.queue.get_nowait()
                 if item is None:
-                    log_error("Received None in visuals queue, continuing")
                     continue
-                if isinstance(item, tuple) and len(item) == 2:
-                    image, detections = item
-                else:
-                    log_error(f"Warning: Unexpected item format in visuals queue: {type(item)} - {item}")
-                    image = item if not isinstance(item, tuple) else item[0]
-                    detections = sv.Detections.empty() if hasattr(sv, 'Detections') else None
-                
-                if image is None:
-                    self.running = False
-                    break
-
-                if not hasattr(image, "shape"):
-                    log_error("Invalid image received in visuals queue")
-                    continue
-                self.image = image
-                self.handle_screenshot()
-                if self.show_window or self.show_overlay:
-                    self.display_image(detections if detections is not None else sv.Detections.empty())
+                image, detections = item if isinstance(item, tuple) else (item, sv.Detections.empty())
+                if image is not None:
+                    self.image = image
+                    self.handle_screenshot()
+                    if self.show_window or self.show_overlay:
+                        self.display_image(detections)
             except queue.Empty:
-                continue
+                time.sleep(0.01)  # Brief sleep to avoid busy-wait
             except Exception as e:
                 log_error("Error in Visuals run loop", e)
 
@@ -121,7 +109,7 @@ class Visuals(threading.Thread):
                 annotated_img = self.annotate_with_supervision(detections, display_img)
             else:
                 annotated_img = display_img
-
+    
     def mouse_callback(self, event, x, y, flags, param):
         if not self.show_window:
             return
@@ -212,18 +200,12 @@ class Visuals(threading.Thread):
                 log_error("Error setting window to always on top", e)
 
     def resize_image(self, display_img):
-        if (self.cached_resize_dims is None or 
-            (display_img.shape[0], display_img.shape[1]) != self.cached_resize_dims[2:]):
-            try:
-                scale_percent = int(cfg.debug_window_scale_percent)
-            except (ValueError, TypeError):
-                scale_percent = 100
+        if self.cached_resize_dims is None or self.cached_resize_dims[2:] != display_img.shape[:2]:
+            scale_percent = int(cfg.debug_window_scale_percent)
             height = int(display_img.shape[0] * scale_percent / 100)
             width = int(display_img.shape[1] * scale_percent / 100)
-            self.cached_resize_dims = (width, height, display_img.shape[0], display_img.shape[1])
-        else:
-            width, height, _, _ = self.cached_resize_dims
-        return cv2.resize(display_img, (width, height), self.interpolation)
+            self.cached_resize_dims = (width, height, *display_img.shape[:2])
+        return cv2.resize(display_img, self.cached_resize_dims[:2], interpolation=self.interpolation)
 
     def cleanup(self):
         self.running = False
@@ -231,20 +213,13 @@ class Visuals(threading.Thread):
         cv2.waitKey(1)
 
     def annotate_with_supervision(self, detections, image):
-        if cfg.show_boxes:
-            annotated_image = self.bounding_box_annotator.annotate(
-                scene=image,
-                detections=detections
-            )
-            if cfg.show_labels or cfg.show_conf:
-                labels = [f"{self.cls_model_data.get(cls, 'Unknown')} {conf:.2f}" for cls, conf in zip(detections.class_id, detections.confidence)]
-                annotated_image = self.label_annotator.annotate(
-                    scene=annotated_image,
-                    detections=detections,
-                    labels=labels
-                )
-            return annotated_image
-        return image
+        if not cfg.show_boxes or len(detections.xyxy) == 0:
+            return image
+        annotated_image = self.bounding_box_annotator.annotate(scene=image, detections=detections)
+        if cfg.show_labels or cfg.show_conf:
+            labels = [f"{self.cls_model_data.get(cls, 'Unknown')} {conf:.2f}" for cls, conf in zip(detections.class_id, detections.confidence)]
+            annotated_image = self.label_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+        return annotated_image
 
     def draw_aim_point(self, x, y):
         if self.show_window and self.image is not None:

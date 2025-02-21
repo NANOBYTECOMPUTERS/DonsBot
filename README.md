@@ -1,32 +1,47 @@
 
 ## Overview
-Dons Bot is a rewrite of Sunone_Aimbot. This is a Beta update so dont expect there will not ba a bug here and there.
-
-It leverages the YOLOV11 models, PyTorch, and various other tools to automatically target and aim at enemies within the game. The AI model in repository has been trained on more than 30,000 images from popular first-person shooter games like Warface, Destiny 2, Battlefield (all series), Fortnite, The Finals, CS2 and more.
+Dons Bot is a rewrite of Sunone_Aimbot. It leverages the YOLOV11 models, PyTorch, and various other tools to automatically target and aim at enemies within the game. The AI model in repository has been trained on more than 30,000 images from popular first-person shooter games like Warface, Destiny 2, Battlefield (all series), Fortnite, The Finals, CS2 and more.
 > [!WARNING]
 > Use it at your own risk, There is NO guarentee this will not get you banned!
 
 > [!NOTE]
-> This requires an NVIDIA card. Old video cards CANNOT handle this program
-> 
+> This requires an NVIDIA RTX+ card. Old video cards CANNOT handle this
 > [!First_Run]
-> if you are having issues and have python, cuda, and tensorrt installed run the fixissues.bat in the folder it will fix the issues you are having.
+> If you are comming from another python bot try pip install -r requirements.txt and run bot with run.bat.
+> If you are totally new to this try running installer.bat as administrator than run.bat after.
 
->F2 is to quit
->F3 is to pause
->F5 is to open settings window (note the restart feature is not working I will fix when I get time and remember)
->Right Mouse Button is the default aim key
->
-> to use razer mouse you will need a razer brand mouse and synapse with the macro module installed inside of it.
->To use Ghub mouse you will need the proper Logitech Ghub installed and add your game in the logitech program settings.
-                
+
+## Requirements
+  CUDA 12.4 or higher
+  Python 3.11.6
+  PyTorch 2.7.0 or higher
+  cuda_python
+  bettercam
+  numpy
+  pywin32
+  screeninfo
+  asyncio
+  onnxruntime
+  onnxruntime-gpu
+  pyserial
+  requests
+  opencv-python
+  packaging
+  ultralytics
+  keyboard
+  mss
+  supervision
+  tensorrt-cu12==10.3.0
+  tensorrt-cu12_bindings==10.3.0
+  tensorrt-cu12_libs==10.3.0
 
 
 ## MANUAL Installation links
 - Download and install [Python](https://www.python.org/downloads/).
 - Download and install [CUDA](https://developer.nvidia.com/cuda-toolkit).
 - Download and install [TensorRT](https://developer.nvidia.com/tensorrt).
-
+- Download and install [Ultralytics](https://github.com/ultralytics/yolov5).
+- Download and install [OpenCV](https://pypi.org/project/opencv-python/).
 
 <br></br>
 - To launch the aimbot after all installations, double click deploy.bat or type `run.py` in cdm from the project folder.
@@ -40,15 +55,14 @@ It leverages the YOLOV11 models, PyTorch, and various other tools to automatical
 - Use the F3 key to pause the aimbot and F2 to wuit.
 - export to `.engine`.
 - Turn off the debug window.
+- Do not use the `--half` option, it will not improve performance.
 - Do not increase the object search window resolution, this may affect your search speed.
-- If you have started the application and nothing happens, it may be working, close it with the F2 key and change the `show_window` option to `True` in the file [config.ini]
+- If you have started the application and nothing happens, it may be working, close it with the F2 key and change the `show_window` option to `True` in the file [config.ini](https://github.com/SunOner/sunone_aimbot/blob/main/config.ini) to make sure that the application is working.
 
 ## Support the project
 [cashapp] $DonArrington
 
-
-
-# For Sunones Models see his project page or visit his boosty page
+# For Sunones Models
 [Boosty](https://boosty.to/sunone)
 
 ## License

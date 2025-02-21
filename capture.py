@@ -1,3 +1,4 @@
+#capture.py ---
 import threading
 import queue
 import ctypes
@@ -80,19 +81,13 @@ class Capture(threading.Thread):
         return mask
     
     def save_mask_points(self, points):
-        """Save mask points to file and update mask in memory"""
-        if len(points) != 6:
-            log_error(f"Expected 6 points, got {len(points)}")
+        if len(points) != 6 or points == self.mask_points:
             return
-        try:
-            with open(self.MASK_FILE, 'wb') as f:
-                pickle.dump(points, f)
-            self.mask_points = points
-            self.custom_mask = self._create_mask_from_points(points)
-            log_error("Custom polygon mask saved and updated in memory")
-        except Exception as e:
-            log_error("Error saving mask points", e)
-    
+        with open(self.MASK_FILE, 'wb') as f:
+            pickle.dump(points, f)
+        self.mask_points = points
+        self.custom_mask = self._create_mask_from_points(points)
+
     def setup_bettercam(self):
         """Configure and start the bettercam instance"""
         region = self.calculate_screen_offset(
@@ -157,22 +152,15 @@ class Capture(threading.Thread):
         return frame
     
     def run(self):
-        """Continuously capture frames and enqueue them"""
         while not self._stop_event.is_set():
             frame = self.capture_frame()
             if frame is not None:
                 try:
                     self.frame_queue.put_nowait(frame)
                 except queue.Full:
-                    # Instead of two queue operations, simply remove the old frame and put the new one
-                    try:
-                        self.frame_queue.get_nowait()
-                    except queue.Empty:
-                        pass
+                    self.frame_queue.get_nowait()
                     self.frame_queue.put_nowait(frame)
-            else:
-                # Slightly longer sleep to reduce CPU usage when no frame is available.
-                time.sleep(0.01)
+            time.sleep(0.001)  # Minimal sleep
     
     def get_new_frame(self):
         """Retrieve a new frame from the frame queue with a timeout"""

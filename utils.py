@@ -1,6 +1,8 @@
 # utils.py ---
 
 import logging
+import logging.handlers
+import queue
 import time
 import cv2
 import torch
@@ -13,30 +15,18 @@ class CudaLogFilter(logging.Filter):
                    "add pending dealloc: cuMemFree_v2" in msg or
                    "mouse_event" in msg.lower())
 
+
 def setup_logging():
-    """Set up logging configuration with CUDA log filtering"""
-    # Create logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-
-    # Create file handler
-    file_handler = logging.FileHandler('app.log')
-    file_handler.setLevel(logging.INFO)
-
-    # Create formatter
+    handler = logging.handlers.QueueHandler(queue.Queue(-1))  # Unbounded queue
+    handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-
-    # Add filter to suppress CUDA deallocation logs
-    file_handler.addFilter(CudaLogFilter())
-
-    # Clear any existing handlers and add our handler
-    logger.handlers = [file_handler]
-
-    # Reduce verbosity of external libraries
-    logging.getLogger('torch').setLevel(logging.WARNING)
-    logging.getLogger('numba').setLevel(logging.WARNING)
-
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    listener = logging.handlers.QueueListener(handler.queue, logging.FileHandler('app.log'))
+    listener.start()
+    
 def log_error(message, exception=None):
     """Log an error message"""
     logging.error(f"{message}: {str(exception)}" if exception else message)
@@ -56,16 +46,17 @@ def cleanup_resources(capture_obj, visuals_obj, overlay_obj):
     except Exception as e:
         log_error("Error during cleanup", e)
 
+_torch_device_cache = None
 def get_torch_device(cfg_obj):
-    """Select the torch device based on configuration"""
-    try:
+    global _torch_device_cache
+    if _torch_device_cache is None:
         ai_device = str(cfg_obj.ai_device).strip().lower()
         if cfg_obj.ai_enable_amd:
-            return torch.device(f'hip:{ai_device}')
+            _torch_device_cache = torch.device(f'hip:{ai_device}')
         elif 'cpu' in ai_device:
-            return torch.device('cpu')
+            _torch_device_cache = torch.device('cpu')
         elif ai_device.isdigit():
-            return torch.device(f'cuda:{ai_device}')
-        return torch.device('cuda:0')
-    except Exception:
-        return torch.device('cpu')
+            _torch_device_cache = torch.device(f'cuda:{ai_device}')
+        else:
+            _torch_device_cache = torch.device('cuda:0')
+    return _torch_device_cache
