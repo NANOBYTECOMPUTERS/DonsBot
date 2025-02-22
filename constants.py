@@ -1,4 +1,4 @@
-# constants.py ---
+#constants.py ---
 CLASS_NAMES = {
     0: 'player',
     1: 'bot',

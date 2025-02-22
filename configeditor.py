@@ -1,5 +1,6 @@
-# configeditor.py ---
+#configeditor.py ---
 import tkinter as tk
+import time
 import os
 from tkinter import ttk
 from utils import log_error
@@ -8,7 +9,8 @@ class ConfigEditor:
         self.root = tk.Tk()
         self.root.title("Config Editor")
         self.restart_callback = restart_callback
-        self.config = config_obj.config  # Use passed config object
+        self.config = config_obj.config
+        self.restart_callback = restart_callback
         
         try:
             config_obj.read(verbose=True)  # Force reload config
@@ -69,13 +71,20 @@ class ConfigEditor:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def save_and_restart(self):
+        """Save config and fully restart the application."""
         self.save_config()
         if self.restart_callback:
             try:
-                self.restart_callback()
+                self.close()  # Close editor UI
+                time.sleep(0.1)  # Brief delay to release Tkinter
+                self.restart_callback()  # Restart app
+                # Ensure this process exits if callback doesn't
+                os._exit(0)
             except Exception as e:
-                log_error("Error during restart: {e}")
-        self.close()
+                log_error(f"Error during restart: {e}")
+                os._exit(1)
+        else:
+            self.close()
 
     def close(self):
         if self.root and self.root.winfo_exists():
@@ -86,12 +95,21 @@ class ConfigEditor:
         for (section, key), var in self.variables.items():
             value = var.get()
             self.config[section][key] = str(value)
-        
         directory = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(directory, "config.ini")
-        
         with open(config_path, 'w') as configfile:
             self.config.write(configfile)
+            
+    def save_and_restart(self):
+        self.save_config()
+        if self.restart_callback:
+            try:
+                self.close()  # Close editor UI first
+                self.restart_callback()  # Then restart
+            except Exception as e:
+                log_error(f"Error during restart: {e}")
+        else:
+            self.close()  # Fallback to just closing if no callback        
 
     def show(self):
         self.root.mainloop()

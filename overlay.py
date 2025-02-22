@@ -1,4 +1,4 @@
-
+#overlay.py (this is broken will come back to it later) ------
 from tkinter import Canvas
 import tkinter as tk
 import tkinter.font as tkFont
@@ -7,6 +7,7 @@ import queue
 import numpy as np
 import supervision as sv
 from config_watcher import cfg
+from utils import log_error
 
 class Overlay:
     # Moved class_map to a class-level constant to avoid recreating it on every call.
@@ -27,11 +28,12 @@ class Overlay:
     def __init__(self):
         self.queue = queue.Queue()
         self.thread = None
+        self.root = None
         # Optionally, remove or adjust frame_skip_counter if processing on every update.
         self.frame_skip_counter = 0
 
     def run(self, width, height):
-        if cfg.show_overlay:
+        if cfg.show_overlay and not self.root:
             self.root = tk.Tk()
             self.root.overrideredirect(True)
             screen_width = self.root.winfo_screenwidth()
@@ -113,3 +115,8 @@ class Overlay:
         if self.thread is None:
             self.thread = threading.Thread(target=self.run, args=(width, height), daemon=True, name="Overlay")
             self.thread.start()
+    def cleanup(self):  # Add if not present
+        if self.root:
+            self.root.destroy()
+            self.root = None
+            log_error("Overlay closed")       

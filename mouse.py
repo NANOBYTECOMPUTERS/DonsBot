@@ -7,6 +7,7 @@ import torch.nn as nn
 import win32api
 import win32con
 import supervision as sv
+import cupy as cp
 from buttons import Buttons
 from config_watcher import cfg
 from utils import get_torch_device
@@ -78,8 +79,7 @@ class MouseThread:
         self.min_speed_multiplier = cfg.mouse_min_speed_multiplier
         self.max_speed_multiplier = cfg.mouse_max_speed_multiplier
         self.bscope = False
-        self.deg_per_pixel_x = self.fov_x / self.screen_width
-        self.deg_per_pixel_y = self.fov_y / self.screen_height
+
         # Precompute values that do not change often
         self.update_settings()
 
@@ -124,74 +124,87 @@ class MouseThread:
             self.center_x = self.screen_width / 2.0
             self.center_y = self.screen_height / 2.0
 
-
+            # Precompute per-pixel degrees
+            self.deg_per_pixel_x = self.fov_x / self.screen_width
+            self.deg_per_pixel_y = self.fov_y / self.screen_height
         except Exception as exc:
             log_error("Error updating settings: {exc}")
 
     def process_data(self, data):
         try:
             if isinstance(data, sv.Detections):
-                target_data = data.xyxy.mean(axis=1)
-                target_w = data.xyxy[:, 2] - data.xyxy[:, 0]
-                target_h = data.xyxy[:, 3] - data.xyxy[:, 1]
+                # Convert xyxy to CuPy array for GPU processing
+                xyxy = cp.asarray(data.xyxy)
+                target_data = cp.mean(xyxy, axis=1)  # Mean along axis 1 (x, y pairs)
+                target_w = xyxy[:, 2] - xyxy[:, 0]   # Widths
+                target_h = xyxy[:, 3] - xyxy[:, 1]   # Heights
+                # Extract first target (or adapt for multi-target logic)
+                target_x, target_y = cp.asnumpy(target_data[0]), cp.asnumpy(target_data[1])
                 target_cls = data.class_id[0] if data.class_id.size > 0 else None
                 target_id = data.tracker_id[0] if data.tracker_id is not None else None
-                target_x, target_y = target_data[0], target_data[1]
             else:
                 (target_x, target_y, target_w, target_h, target_cls, target_id) = data
-
-            if cfg.ai_mouse_net:
-                input_list = [
-                    target_x, target_y,
-                    target_w, target_h,
-                    target_cls if target_cls is not None else 0,
-                    target_id if target_id is not None else 0,
-                    self.center_x, self.center_y
-                ]
-                input_tensor = torch.tensor(input_list, device=self.device, dtype=torch.float32).unsqueeze(0)
-                with torch.no_grad():
-                    movement = self.model(input_tensor).squeeze(0)
-                move_x, move_y = movement.tolist()
-            else:
-                move_x, move_y = self.calc_movement(target_x, target_y)
-
-           # show_target_visuals = (
-               # (cfg.show_window or cfg.show_overlay) and 
-               # (cfg.show_target_line or cfg.show_target_prediction_line or cfg.show_history_points)
-           # )
-
-                # These methods no longer exist in Visuals, comment them out or remove them
-                # if cfg.show_target_line:
-                #     self.context.visuals.draw_target_line(target_x, target_y, target_cls)
-                # if cfg.show_target_prediction_line and not self.disable_prediction:
-                #     predicted_x, predicted_y = self.predict_target_position(target_x, target_y, time.time())
-                #     self.context.visuals.draw_predicted_position(predicted_x, predicted_y, target_cls)
-                # if cfg.show_history_points:
-                #     self.context.visuals.draw_history_point_add_point(target_x, target_y)
+            move_x, move_y = self.calc_movement(target_x, target_y)
 
 
+            # Rest of your logic (bscope, shooting, etc.)
             self.bscope = (self.check_target_in_scope(target_x, target_y, target_w, target_h, self.bscope_multiplier)
-                           if (cfg.auto_shoot or cfg.triggerbot) else False)
+                        if (cfg.auto_shoot or cfg.triggerbot) else False)
             self.bscope = cfg.force_click or self.bscope
 
             shooting_key_state = self.get_shooting_key_state()
             self.context.shooting.queue.put((self.bscope, shooting_key_state))
             self.move_mouse(move_x, move_y, shooting_key_state)
         except Exception as e:
-            log_error("Error in process_data", e)  # Fixed logging
+            log_error("Error in process_data", e)
 
     def predict_target_position(self, target_x, target_y, current_time):
+        """Predict target position with velocity and acceleration."""
         if self.prev_time is None or self.prev_position is None:
+            # First call: initialize and return current position
             self.prev_position = (target_x, target_y)
             self.prev_time = current_time
             return target_x, target_y
+        
+        if self.prev_prev_time is None or self.prev_prev_position is None:
+            # Second call: compute velocity, no acceleration yet
+            delta_time = current_time - self.prev_time
+            if delta_time == 0:
+                return target_x, target_y
+            velocity_x = (target_x - self.prev_position[0]) / delta_time
+            velocity_y = (target_y - self.prev_position[1]) / delta_time
+            pred_x = target_x + velocity_x * self.prediction_interval
+            pred_y = target_y + velocity_y * self.prediction_interval
+            self.prev_prev_position = self.prev_position
+            self.prev_prev_time = self.prev_time
+            self.prev_position = (target_x, target_y)
+            self.prev_time = current_time
+            return pred_x, pred_y
+
+        # Third call onward: compute acceleration
         delta_time = current_time - self.prev_time
-        if delta_time == 0:
+        prev_delta_time = self.prev_time - self.prev_prev_time
+        if delta_time == 0 or prev_delta_time == 0:
             return target_x, target_y
+
+        # Velocity between current and previous
         velocity_x = (target_x - self.prev_position[0]) / delta_time
         velocity_y = (target_y - self.prev_position[1]) / delta_time
-        pred_x = target_x + velocity_x * self.prediction_interval
-        pred_y = target_y + velocity_y * self.prediction_interval
+        # Previous velocity
+        prev_velocity_x = (self.prev_position[0] - self.prev_prev_position[0]) / prev_delta_time
+        prev_velocity_y = (self.prev_position[1] - self.prev_prev_position[1]) / prev_delta_time
+        # Acceleration
+        accel_x = (velocity_x - prev_velocity_x) / delta_time
+        accel_y = (velocity_y - prev_velocity_y) / delta_time
+
+        # Predict using position + velocity * t + 0.5 * acceleration * t^2
+        t = self.prediction_interval
+        pred_x = target_x + velocity_x * t + 0.5 * accel_x * t * t
+        pred_y = target_y + velocity_y * t + 0.5 * accel_y * t * t
+
+        # Update history
+        self.prev_prev_position = self.prev_position
+        self.prev_prev_time = self.prev_time
         self.prev_position = (target_x, target_y)
         self.prev_time = current_time
         return pred_x, pred_y
@@ -202,33 +215,47 @@ class MouseThread:
         return self.min_speed_multiplier + (self.max_speed_multiplier - self.min_speed_multiplier) * (1 - normalized_distance)
 
     def calc_movement(self, target_x, target_y):
-        """Calculate the movement values based on target location relative to screen center."""
+        """Calculate movement values using CuPy for potential batch processing."""
+        # Convert inputs to CuPy arrays (works with scalars or arrays)
+        target_x = cp.asarray(target_x)
+        target_y = cp.asarray(target_y)
+        
+        # Compute offsets from center
         offset_x = target_x - self.center_x
         offset_y = target_y - self.center_y
-        distance = math.hypot(offset_x, offset_y)
+        
+        # Compute distance using CuPy’s hypot function
+        distance = cp.hypot(offset_x, offset_y)
         speed_multiplier = self.calculate_speed_multiplier(distance)
 
-        # Using precomputed degrees per pixel
+        # Use precomputed degrees per pixel
         mouse_move_x = offset_x * self.deg_per_pixel_x
         mouse_move_y = offset_y * self.deg_per_pixel_y
 
+        # Calculate final movement with scaling
         move_x = (mouse_move_x / 360) * (self.dpi / self.mouse_sensitivity) * speed_multiplier
         move_y = (mouse_move_y / 360) * (self.dpi / self.mouse_sensitivity) * speed_multiplier
-        return move_x, move_y
-    
+
+        # Convert back to NumPy/Python scalars for downstream use
+        return cp.asnumpy(move_x), cp.asnumpy(move_y)
+
     def move_mouse(self, x, y, shooting_key_state):
-        x, y = x or 0, y or 0
-        if x == 0 and y == 0:
-            return
-        if (shooting_key_state and not cfg.mouse_auto_aim and not cfg.triggerbot) or cfg.mouse_auto_aim:
-            if cfg.mouse_rzr:
-                self.rzr.mouse_move(int(x), int(y), True)
-            elif cfg.mouse_ghub:
-                self.ghub.mouse_xy(int(x), int(y))
-            elif cfg.arduino_move:
-                arduino.move(int(x), int(y))
-            else:
-                win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(x), int(y), 0, 0)
+        """Move the mouse cursor based on computed values and system settings."""
+        x = x or 0
+        y = y or 0
+        try:
+            if x != 0 or y != 0:
+                if (shooting_key_state and not cfg.mouse_auto_aim and not cfg.triggerbot) or cfg.mouse_auto_aim:
+                    if not cfg.mouse_ghub and not cfg.arduino_move and not cfg.mouse_rzr:
+                        win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, int(x), int(y), 0, 0)
+                    elif cfg.mouse_ghub and not cfg.arduino_move and not cfg.mouse_rzr:
+                        self.ghub.mouse_xy(int(x), int(y))
+                    elif cfg.mouse_rzr:
+                        self.rzr.mouse_move(int(x), int(y), True)
+                    elif cfg.arduino_move:
+                        arduino.move(int(x), int(y))
+        except Exception as exc:
+            log_error("Error in move_mouse: {exc}")
 
     def get_shooting_key_state(self):
         """Check and return whether any of the configured hotkeys are pressed."""
@@ -243,18 +270,18 @@ class MouseThread:
             log_error("Error checking shooting key state: {exc}")
         return False
 
-def check_target_in_scope(self, target_x, target_y, target_w, target_h, reduction_factor):
-        """
-        Determine if the target is within a reduced bounding box (scope) on the screen.
-        Draw the box if the configuration option is enabled.
-        """
-        reduced_w = target_w * reduction_factor / 2.0
-        reduced_h = target_h * reduction_factor / 2.0
-        x1, x2 = target_x - reduced_w, target_x + reduced_w
-        y1, y2 = target_y - reduced_h, target_y + reduced_h
-        bscope = (self.center_x > x1 and self.center_x < x2 and
-                  self.center_y > y1 and self.center_y < y2)
-        # This method no longer exists in Visuals, comment it out or remove it
-        # if cfg.show_window and cfg.show_bscope_box:
-        #     self.context.draw_bscope(x1, x2, y1, y2, bscope)
-        return bscope
+    def check_target_in_scope(self, target_x, target_y, target_w, target_h, reduction_factor):
+            """
+            Determine if the target is within a reduced bounding box (scope) on the screen.
+            Draw the box if the configuration option is enabled.
+            """
+            reduced_w = target_w * reduction_factor / 2.0
+            reduced_h = target_h * reduction_factor / 2.0
+            x1, x2 = target_x - reduced_w, target_x + reduced_w
+            y1, y2 = target_y - reduced_h, target_y + reduced_h
+            bscope = (self.center_x > x1 and self.center_x < x2 and
+                    self.center_y > y1 and self.center_y < y2)
+            # This method no longer exists in Visuals, comment it out or remove it
+            # if cfg.show_window and cfg.show_bscope_box:
+            #     self.context.draw_bscope(x1, x2, y1, y2, bscope)
+            return bscope

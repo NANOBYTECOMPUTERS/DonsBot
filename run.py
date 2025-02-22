@@ -1,4 +1,3 @@
-# run.py ---
 import os
 import time
 import sys
@@ -12,50 +11,48 @@ from config_watcher import cfg
 from init import get_app_context
 from checks import run_checks
 from utils import log_error
-from threading import Lock
-PADDING_CACHE_LOCK = Lock()
 
+# Constants
 IOU_THRESHOLD = 0.7
 MAX_DETECTIONS = 20
 ARROW_COLOR = (0, 255, 0)
 ALIGNMENT = 128
 
-# Create a global cache for padded dimensions to avoid re-computation across frames.
-PADDING_CACHE = {}
+# Runtime configuration (precomputed values)
+class RunConfig:
+    def __init__(self):
+        self.pad_height = ((cfg.detection_window_height + ALIGNMENT - 1) // ALIGNMENT) * ALIGNMENT
+        self.pad_width = ((cfg.detection_window_width + ALIGNMENT - 1) // ALIGNMENT) * ALIGNMENT
+        self.use_padding = cfg.use_padding
+        self.show_visuals = cfg.show_window or cfg.show_overlay
+        self.show_trajectory = self.show_visuals and cfg.show_trajectory
+        self.frame_interval = 1 / cfg.bettercam_capture_fps  # Dynamic sleep based on target FPS
+
+run_config = RunConfig()
+
+# Optimized padding function
+def pad_to_alignment(arr):
+    if arr.shape[:2] == (run_config.pad_height, run_config.pad_width):
+        return arr
+    return np.pad(arr, ((0, run_config.pad_height - arr.shape[0]), 
+                        (0, run_config.pad_width - arr.shape[1]), (0, 0)), mode='constant')
 
 class Tracker:
     def __init__(self):
-        self.global_tracker = None
-        if not cfg.disable_tracker:
-            self.global_tracker = sv.ByteTrack()
+        self.global_tracker = sv.ByteTrack() if not cfg.disable_tracker else None
 
     def update(self, detections):
         if self.global_tracker is not None:
             return self.global_tracker.update_with_detections(detections)
         return detections
 
-tracker = Tracker()
-
-
-def pad_to_alignment(arr, alignment=ALIGNMENT):
-    key = (arr.shape[0], arr.shape[1], arr.shape[2])
-    with PADDING_CACHE_LOCK:
-        if key not in PADDING_CACHE:
-            new_height = ((arr.shape[0] + alignment - 1) // alignment) * alignment
-            new_width = ((arr.shape[1] + alignment - 1) // alignment) * alignment
-            PADDING_CACHE[key] = (new_height, new_width)
-        new_height, new_width = PADDING_CACHE[key]
-    return np.pad(arr, ((0, new_height - arr.shape[0]), (0, new_width - arr.shape[1]), (0, 0)), mode='constant')
-
 @torch.inference_mode()
-def perform_detection(model, images):
-    if isinstance(images, np.ndarray):  # Single image
-        images = [images]
-    images_np = [np.ascontiguousarray(img) for img in images]
-    if cfg.use_padding:
-        images_np = [pad_to_alignment(img) for img in images_np]
+def perform_detection(model, image, tracker):
+    image_np = np.ascontiguousarray(image)
+    if run_config.use_padding:
+        image_np = pad_to_alignment(image_np)
     results = model.predict(
-        source=images_np,
+        source=[image_np],
         imgsz=cfg.ai_model_image_size,
         stream=True,
         conf=cfg.ai_conf,
@@ -65,91 +62,69 @@ def perform_detection(model, images):
         max_det=MAX_DETECTIONS,
         verbose=True
     )
-    
-    # Process only the first detection (assuming it is the desired behavior)
-    for result in results:
+    for result in results:  # Stream mode yields one result per frame
         detections = sv.Detections.from_ultralytics(result)
-        tracked_detections = tracker.update(detections)
-        if tracked_detections is not None:
-            return tracked_detections
+        return tracker.update(detections) or sv.Detections.empty()
     return sv.Detections.empty()
-    
 
-def draw_trajectory(image, detections):
-    for track in detections.tracks:
-        if track.trace and len(track.trace) > 1:
-            points = track.trace[-2:]
-            p0 = (int(points[0][0]), int(points[0][1]))
-            p1 = (int(points[1][0]), int(points[1][1]))
-            cv2.arrowedLine(image, p0, p1, ARROW_COLOR, 2)
 
 def run_bot(context):
     run_checks()
-
-    try:
-        model_path = f"models/{cfg.ai_model_name}"
-        model = YOLO(model_path, task="detect")
-    except Exception as e:
-        log_error("Error loading AI model", e)
-        raise
-
+    model = YOLO(f"models/{cfg.ai_model_name}", task="detect")
+    show_visuals = cfg.show_window or cfg.show_overlay
+    
     while True:
         try:
             image = context.capture.get_new_frame()
-            if image is not None:
-                if cfg.show_window or cfg.show_overlay:
-                    context.visuals.queue.put((image, sv.Detections.empty()))  # Default to empty detections if needed
-
-                if context.hotkeys_watcher.app_pause != 0:
-                    time.sleep(0.5)
-                    continue
-
-                result = perform_detection(model, image)
-                if result is None:
-                    result = sv.Detections.empty()  # Provide a default empty detection if None
-
-                context.frame_parser.parse(result)
-                if cfg.show_window or cfg.show_overlay:
-                    context.visuals.queue.put((image, result))
+            if image is None:
+                time.sleep(1 / cfg.bettercam_capture_fps)
+                continue
+            if context.hotkeys_watcher.app_pause != 0:
+                time.sleep(0.1)
+                continue
+            
+            # Apply mask before detection if enabled
+            masked_image = image if not cfg.polygon_mask_enabled else context.capture.custom_mask_frame(image)
+            result = perform_detection(model, masked_image, context.tracker) or sv.Detections.empty()
+            context.frame_parser.parse(result)
+            
+            if show_visuals:
+                context.visuals.queue.put((image, result))  # Original image for visuals
+                if cfg.show_overlay:
                     context.overlay.queue.put((image, result))
-
-                if (cfg.show_window or cfg.show_overlay) and cfg.show_trajectory:
-                    draw_trajectory(image, result)
-            else:
-                time.sleep(0.08)
         except Exception as e:
             log_error("Error in main loop", e)
-            time.sleep(1)
+            time.sleep(0.1)
 
 def restart_bot(context):
-    """Restart the entire application"""
+    """Restart the entire application cleanly"""
     print("Restarting bot...")
     try:
-        context.cleanup()
+        context.cleanup()  # Full cleanup
+        cv2.destroyAllWindows()
+        # Close any lingering Tkinter roots
+        if 'tkinter' in sys.modules:
+            import tkinter as tk
+            if tk._default_root:
+                tk._default_root.destroy()
+        time.sleep(0.5)  # Longer delay to ensure cleanup
         python = sys.executable
         args = sys.argv[:]
         subprocess.Popen([python] + args)
-        os._exit(0)
+        os._exit(0)  # Force exit, stronger than sys.exit
     except Exception as e:
-        log_error("Error during restart", e)
+        log_error(f"Error during restart: {e}")
         os._exit(1)
-
 def main():
-    context = None
+    context = get_app_context()
     try:
-        context = get_app_context()
-        cfg.set_restart_callback(restart_bot)
+        cfg.set_restart_callback(lambda: restart_bot(context))
         context.tracker = Tracker()
         run_bot(context)
-    except KeyboardInterrupt:
+    finally:
         if context:
             context.cleanup()
-        sys.exit(0)
-    except Exception as e:
-        log_error("Fatal error", e)
-        if context:
-            context.cleanup()
-        sys.exit(1)
+    os._exit(0)
 
 if __name__ == "__main__":
-        main()
+    main()

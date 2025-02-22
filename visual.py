@@ -1,4 +1,3 @@
-#visual.py ---
 import queue
 import threading
 import time
@@ -59,10 +58,11 @@ class Visuals(threading.Thread):
                 10: 'third_person'
             }
             self.disabled_line_classes = [2, 3, 4, 8, 9, 10]
-            self.cached_resize_dims = None
+            self.cached_resize_dims = None            
             self.running = True
             self.editing_mask = False
-            self.mask_points = self.context.capture.mask_points.copy()
+            # Use Capture's mask points directly for consistency
+            self.mask_points = self.context.capture.mask_points
             self.selected_point = None
             self.bounding_box_annotator = sv.BoxAnnotator(
                 color=sv.ColorPalette.DEFAULT,
@@ -95,21 +95,41 @@ class Visuals(threading.Thread):
                     if self.show_window or self.show_overlay:
                         self.display_image(detections)
             except queue.Empty:
-                time.sleep(0.01)  # Brief sleep to avoid busy-wait
+                time.sleep(0.01)
             except Exception as e:
                 log_error("Error in Visuals run loop", e)
 
     def display_image(self, detections):
-        if self.show_window:
-            display_img = self.image.copy()
-            if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
-                display_img = self.resize_image(display_img)
+        if not self.show_window:
+            return
 
-            if cfg.show_boxes:
-                annotated_img = self.annotate_with_supervision(detections, display_img)
-            else:
-                annotated_img = display_img
-    
+        display_img = self.image.copy()
+        if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
+            display_img = self.resize_image(display_img)
+
+        if cfg.show_boxes:
+            display_img = self.annotate_with_supervision(detections, display_img)
+
+        if cfg.polygon_mask_enabled and len(self.context.capture.mask_points) > 0:
+            points = np.array(self.context.capture.mask_points, dtype=np.int32)
+            cv2.polylines(display_img, [points], True, (0, 255, 0), 2)
+            cv2.fillPoly(display_img, [points], (0, 0, 0, 128))
+            for i, (px, py) in enumerate(self.context.capture.mask_points):
+                if isinstance(px, (int, float)) and isinstance(py, (int, float)):
+                    cv2.circle(display_img, (int(px), int(py)), 5, (0, 0, 255), -1)
+                    cv2.putText(display_img, str(i), (int(px) + 10, int(py) - 10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                else:
+                    log_error(f"Invalid point at index {i}: {(px, py)}")
+
+        window_name = getattr(cfg, "debug_window_name", "Debug Window")
+        cv2.imshow(window_name, display_img)
+        cv2.setMouseCallback(window_name, self.mouse_callback)
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            self.running = False
+            self.cleanup()
+
     def mouse_callback(self, event, x, y, flags, param):
         if not self.show_window:
             return
@@ -118,47 +138,19 @@ class Visuals(threading.Thread):
 
         if event == cv2.EVENT_LBUTTONDOWN:
             self.editing_mask = True
-            # Find nearest point to click
-            distances = [((p[0] - x)**2 + (p[1] - y)**2) for p in self.mask_points]
+            distances = [((p[0] - x)**2 + (p[1] - y)**2) for p in self.context.capture.mask_points]
             if distances:
                 self.selected_point = distances.index(min(distances))
                 log_error(f"Selected point: {self.selected_point}")
         elif event == cv2.EVENT_MOUSEMOVE and self.editing_mask and self.selected_point is not None:
-            self.mask_points[self.selected_point] = (x, y)
+            self.context.capture.mask_points[self.selected_point] = (x, y)
+            self.context.capture.custom_mask = self.context.capture._create_mask_from_points(self.context.capture.mask_points)
             log_error(f"Updated point {self.selected_point} to {x}, {y}")
         elif event == cv2.EVENT_LBUTTONUP and self.editing_mask:
             self.editing_mask = False
             self.selected_point = None
-            self.context.capture.save_mask_points(self.mask_points)
+            self.context.capture.save_mask_points(self.context.capture.mask_points)
             log_error("Mask points saved")
-
-    def display_image(self, detections):
-        if self.show_window:
-            display_img = self.image.copy()
-            if hasattr(cfg, "debug_window_scale_percent") and int(cfg.debug_window_scale_percent) != 100:
-                display_img = self.resize_image(display_img)
-
-            # Annotate image with supervision detections
-            annotated_img = self.annotate_with_supervision(detections, display_img)
-
-            if self.editing_mask or len(self.mask_points) > 0:
-                points = np.array(self.mask_points, dtype=np.int32)
-                cv2.polylines(display_img, [points], True, (0, 255, 0), 2)  # Green for visibility
-                cv2.fillPoly(display_img, [points], (0, 0, 0, 128))  # Semi-transparent black to show the area that will be hidden
-                for i, point in enumerate(self.mask_points):
-                    px, py = point
-                    if isinstance(px, (int, float)) and isinstance(py, (int, float)):
-                        cv2.circle(annotated_img, (int(px), int(py)), 5, (0, 0, 255), -1)
-                        cv2.putText(annotated_img, str(i), (int(px) + 10, int(py) - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-                    else:
-                        log_error(f"Invalid point at index {i}: {point}")
-
-            cv2.imshow(getattr(cfg, "debug_window_name", "Debug Window"), annotated_img)
-            if self.show_window:
-                cv2.setMouseCallback(getattr(cfg, "debug_window_name", "Debug Window"), self.mouse_callback)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                self.running = False
-                self.cleanup()
 
     def handle_screenshot(self):
         screenshot_key = Buttons.KEY_CODES.get(getattr(cfg, "debug_window_screenshot_key", None))
@@ -210,7 +202,8 @@ class Visuals(threading.Thread):
     def cleanup(self):
         self.running = False
         cv2.destroyAllWindows()
-        cv2.waitKey(1)
+        cv2.waitKey(1)  # Ensure OpenCV releases
+        log_error("Debug window closed")
 
     def annotate_with_supervision(self, detections, image):
         if not cfg.show_boxes or len(detections.xyxy) == 0:

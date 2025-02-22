@@ -101,7 +101,8 @@ class Config:
         self.hotkey_exit = self.config[section]["hotkey_exit"]
         self.hotkey_pause = self.config[section]["hotkey_pause"]
         self.hotkey_reload_config = self.config[section]["hotkey_reload_config"]
-
+        self.hotkey_edit_config = self.config[section]["hotkey_edit_config"]
+        
     def load_mouse(self):
         section = self.CONFIG_SECTIONS["MOUSE"]
         self.mouse_dpi = int(self.config[section]["mouse_dpi"])

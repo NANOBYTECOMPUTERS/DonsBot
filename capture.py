@@ -4,6 +4,7 @@ import queue
 import ctypes
 import time
 import cv2
+import cupy as cp
 import numpy as np
 import bettercam
 from screeninfo import get_monitors
@@ -32,9 +33,17 @@ class Capture(threading.Thread):
         # Cache for OBS camera index (initialize to None)
         self.cached_obs_camera_index = None
         
-        # Load or initialize custom mask points and create mask once
+        self.ensure_mask_file_exists()
         self.mask_points = self._load_mask_points()
+        
+        # Force mask to match current config dimensions
+        expected_shape = (int(cfg.detection_window_height), int(cfg.detection_window_width))
         self.custom_mask = self._create_mask_from_points(self.mask_points)
+        if self.custom_mask.shape != expected_shape:
+            log_error(f"Mask shape {self.custom_mask.shape} doesn't match config {expected_shape}, regenerating")
+            self.mask_points = self._generate_default_points()
+            self.custom_mask = self._create_mask_from_points(self.mask_points)
+            self.save_mask_points(self.mask_points)
         self.frame_queue = queue.Queue(maxsize=1)
         self._stop_event = threading.Event()
         self._primary_resolution = self.get_primary_display_resolution()
@@ -48,46 +57,94 @@ class Capture(threading.Thread):
         elif cfg.obs_capture:
             self.setup_obs()
     
-    def _load_mask_points(self):
-        """Load mask points from file or create default if not exists"""
-        if os.path.exists(self.MASK_FILE):
+    def ensure_mask_file_exists(self):
+        """Ensure custom_mask.pkl exists, creating it with default points if missing."""
+        if not os.path.exists(self.MASK_FILE):
+            w, h = cfg.detection_window_width, cfg.detection_window_height
+            center_x, center_y = w // 2, h // 2
+            radius = min(w, h) // 4
+            default_points = [
+                (center_x, center_y - radius),
+                (int(center_x + radius * cp.cos(np.pi/3)), int(center_y - radius * np.sin(np.pi/3))),
+                (center_x + radius, center_y),
+                (center_x, center_y + radius),
+                (int(center_x - radius * np.cos(np.pi/3)), int(center_y + radius * np.sin(np.pi/3))),
+                (center_x - radius, center_y)
+            ]
             try:
-                with open(self.MASK_FILE, 'rb') as f:
-                    points = pickle.load(f)
-                if len(points) == 6 and all(len(p) == 2 for p in points):
-                    return points
+                with open(self.MASK_FILE, 'wb') as f:
+                    pickle.dump(default_points, f)
+                log_error(f"Created {self.MASK_FILE} with default points: {default_points}")
             except Exception as e:
-                log_error("Error loading mask points", e)
-        # Default to a centered hexagon if no valid mask exists
+                log_error(f"Failed to create {self.MASK_FILE}: {e}")
+
+    def _load_mask_points(self):
+        """Load mask points from file, falling back to default if invalid."""
+        try:
+            with open(self.MASK_FILE, 'rb') as f:
+                points = pickle.load(f)
+            if len(points) == 6 and all(len(p) == 2 for p in points):
+                log_error(f"Loaded mask points: {points}")
+                return points
+            else:
+                log_error(f"Invalid mask points in {self.MASK_FILE}, using default")
+        except Exception as e:
+            log_error(f"Error loading mask points from {self.MASK_FILE}: {e}")
+        
+        # Default points if file is missing or corrupt
         w, h = cfg.detection_window_width, cfg.detection_window_height
         center_x, center_y = w // 2, h // 2
         radius = min(w, h) // 4
-        return [
-            (center_x, center_y - radius),  # Top
-            (int(center_x + radius * np.cos(np.pi/3)), int(center_y - radius * np.sin(np.pi/3))),  # Top-right
-            (center_x + radius, center_y),  # Right
-            (center_x, center_y + radius),  # Bottom
-            (int(center_x - radius * np.cos(np.pi/3)), int(center_y + radius * np.sin(np.pi/3))),  # Bottom-left
-            (center_x - radius, center_y)  # Left
+        default_points = [
+            (center_x, center_y - radius),
+            (int(center_x + radius * cp.cos(cp.pi/3)), int(center_y - radius * cp.sin(cp.pi/3))),
+            (center_x + radius, center_y),
+            (center_x, center_y + radius),
+            (int(center_x - radius * cp.cos(cp.pi/3)), int(center_y + radius * cp.sin(cp.pi/3))),
+            (center_x - radius, center_y)
         ]
-    
+        log_error(f"Using default mask points: {default_points}")
+        return default_points
+
+    def save_mask_points(self, points):
+        """Save mask points to file unconditionally."""
+        try:
+            with open(self.MASK_FILE, 'wb') as f:
+                pickle.dump(points, f)
+            self.mask_points = points
+            self.custom_mask = self._create_mask_from_points(points)
+            log_error(f"Saved mask points to {self.MASK_FILE}: {points}")
+        except Exception as e:
+            log_error(f"Failed to save mask points to {self.MASK_FILE}: {e}")
+
     def _create_mask_from_points(self, points):
-        """Create a white mask with black polygon area to cover the player"""
         height = int(cfg.detection_window_height)
         width = int(cfg.detection_window_width)
-        mask = np.ones((height, width), dtype=np.uint8) * 255  # White background
+        mask = np.ones((height, width), dtype=np.uint8) * 255
         points = np.array(points, dtype=np.int32)
-        cv2.fillPoly(mask, [points], 0)  # Black polygon area
+        cv2.fillPoly(mask, [points], 0)
         return mask
-    
-    def save_mask_points(self, points):
-        if len(points) != 6 or points == self.mask_points:
-            return
-        with open(self.MASK_FILE, 'wb') as f:
-            pickle.dump(points, f)
-        self.mask_points = points
-        self.custom_mask = self._create_mask_from_points(points)
 
+    def custom_mask_frame(self, frame):
+        """Apply the custom mask to the frame for detection."""
+        if frame.shape[:2] == self.custom_mask.shape:
+            return cv2.bitwise_and(frame, frame, mask=self.custom_mask)
+        log_error(f"Frame shape {frame.shape[:2]} doesn’t match mask {self.custom_mask.shape}")
+        return frame
+    def _generate_default_points(self):
+        """Generate default hexagon points based on current config."""
+        w, h = int(cfg.detection_window_width), int(cfg.detection_window_height)
+        center_x, center_y = w // 2, h // 2
+        radius = min(w, h) // 4
+        default_points = [
+            (center_x, center_y - radius),
+            (int(center_x + radius * np.cos(np.pi/3)), int(center_y - radius * np.sin(np.pi/3))),
+            (center_x + radius, center_y),
+            (center_x, center_y + radius),
+            (int(center_x - radius * np.cos(np.pi/3)), int(center_y + radius * np.sin(np.pi/3))),
+            (center_x - radius, center_y)
+        ]
+        return default_points
     def setup_bettercam(self):
         """Configure and start the bettercam instance"""
         region = self.calculate_screen_offset(
@@ -127,28 +184,23 @@ class Capture(threading.Thread):
         self.capture_method = "obs"
     
     def capture_frame(self):
-        """Capture a single frame and apply the pre-created custom polygon mask to hide player"""
         frame = None
         if self.capture_method == "bettercam":
             frame = self.bc.get_latest_frame()
-        elif self.capture_method == "obs":
-            ret_val, frame = self.obs_camera.read()
-            if not ret_val:
-                current_time = time.time()
-                if current_time - self._last_error_time > 1:
-                    log_error("Failed to capture frame from OBS Virtual Camera")
-                    self._last_error_time = current_time
-                return None
-
+        # ... OBS logic ...
         if frame is not None and cfg.polygon_mask_enabled:
-            # If the frame has an alpha channel, convert it to BGR
             if frame.shape[2] == 4:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             if frame.shape[:2] == self.custom_mask.shape:
-                # Use OpenCV bitwise operation to apply the mask
                 frame = cv2.bitwise_and(frame, frame, mask=self.custom_mask)
             else:
                 log_error(f"Frame dimensions {frame.shape[:2]} do not match mask dimensions {self.custom_mask.shape}")
+        return frame
+
+    def custom_mask_frame(self, frame):
+        if frame.shape[:2] == self.custom_mask.shape:
+            return cv2.bitwise_and(frame, frame, mask=self.custom_mask)
+        log_error(f"Frame shape {frame.shape[:2]} doesn't match mask {self.custom_mask.shape}")
         return frame
     
     def run(self):
@@ -182,6 +234,15 @@ class Capture(threading.Thread):
             self.screen_y_center = cfg.detection_window_height // 2
             self.prev_detection_window_width = cfg.detection_window_width
             self.prev_detection_window_height = cfg.detection_window_height
+            
+            # Update mask if dimensions changed
+            expected_shape = (int(cfg.detection_window_height), int(cfg.detection_window_width))
+            if self.custom_mask.shape != expected_shape:
+                self.mask_points = self._generate_default_points()
+                self.custom_mask = self._create_mask_from_points(self.mask_points)
+                self.save_mask_points(self.mask_points)
+                log_error("Mask updated due to dimension change")
+            
             log_error("Capture reloaded")
     
     def calculate_screen_offset(self, custom_region=None, x_offset=None, y_offset=None):
@@ -207,17 +268,19 @@ class Capture(threading.Thread):
         return (1920, 1080)
     
     def find_obs_virtual_camera(self):
-        """Attempt to locate the OBS Virtual Camera"""
-        max_tested = 20
-        obs_backend_name = "DSHOW"
-        for i in range(max_tested):
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-            if not cap.isOpened():
+        if os.path.exists("obs_camera_index.txt"):
+            with open("obs_camera_index.txt", "r") as f:
+                idx = int(f.read().strip())
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            if cap.isOpened():
                 cap.release()
-                continue
-            backend_name = cap.getBackendName()
-            if backend_name == obs_backend_name:
-                log_error(f"OBS Virtual Camera found at index {i}")
+                return idx
+            cap.release()
+        for i in range(cv2.VideoCapture.getBackendCount() or 20):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened() and cap.getBackendName() == "DSHOW":
+                with open("obs_camera_index.txt", "w") as f:
+                    f.write(str(i))
                 cap.release()
                 return i
             cap.release()

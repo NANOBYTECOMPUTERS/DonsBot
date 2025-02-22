@@ -1,83 +1,83 @@
-#hotkeys_watcher.py ---
-import os
 import threading
-import cv2
-import win32api
 import time
-from typing import List
+import win32api
+import os
 from buttons import Buttons
 from config_watcher import cfg
 from utils import log_error
 
-# Constants
-CLASS_0 = 0.0
-CLASS_1 = 1.0
-CLASS_5 = 5.0
-CLASS_6 = 6.0
-CLASS_7 = 7.0
-CLASS_10 = 10.0
-
-class HotkeysWatcher(threading.Thread):
+class HotkeysWatcher:
     def __init__(self, context):
-        super().__init__()
         self.context = context
-        self.daemon = True
-        self.name = 'HotkeysWatcher'
+        self.running = True
         self.app_pause = 0
-        self.clss = self.active_classes()  # Initialize clss
-        self.start()
+        self.clss = None  # Cached active classes, if used by frame_parser
+        self.hotkey_exit = Buttons.KEY_CODES.get(cfg.hotkey_exit, 113)  # Default F2
+        self.hotkey_pause = Buttons.KEY_CODES.get(cfg.hotkey_pause, 114)  # Default F3
+        self.hotkey_reload = Buttons.KEY_CODES.get(cfg.hotkey_reload_config, 115)  # Default F4
+        self.hotkey_edit = Buttons.KEY_CODES.get(cfg.hotkey_edit_config, 116)  # Default F5
+        
+        log_error("HotkeysWatcher initialized")
+        self.start_monitoring_hotkeys()
 
-    def run(self):
-        cfg_reload_prev_state = 0
+    def start_monitoring_hotkeys(self):
+        """Start a thread to monitor hotkeys."""
+        self.hotkey_thread = threading.Thread(target=self.monitor_hotkeys, daemon=True)
+        self.hotkey_thread.start()
+
+    def monitor_hotkeys(self):
+        """Monitor hotkey states and trigger actions."""
+        while self.running:
+            try:
+                # Exit hotkey (e.g., F2)
+                if win32api.GetAsyncKeyState(self.hotkey_exit) & 0x8000:
+                    log_error("Exit hotkey pressed, shutting down")
+                    self.context.cleanup()
+                    os._exit(0)  # Force immediate exit
+                
+                # Pause hotkey (e.g., F3)
+                if win32api.GetAsyncKeyState(self.hotkey_pause) & 0x8000:
+                    self.app_pause = 1 if self.app_pause == 0 else 0
+                    log_error(f"App pause toggled to: {self.app_pause}")
+                    time.sleep(0.2)  # Debounce
+                
+                # Reload config hotkey (e.g., F4)
+                if win32api.GetAsyncKeyState(self.hotkey_reload) & 0x8000:
+                    cfg.read(verbose=True)
+                    log_error("Config reloaded")
+                    time.sleep(0.2)  # Debounce
+                
+                # Edit config hotkey (e.g., F5)
+                if win32api.GetAsyncKeyState(self.hotkey_edit) & 0x8000:
+                    cfg.edit_config()
+                    log_error("Config editor opened")
+                    time.sleep(0.2)  # Debounce
+            
+            except Exception as e:
+                log_error(f"Error in hotkey monitoring: {e}")
+            time.sleep(0.01)  # Reduce CPU usage
+
+    def active_classes(self):
+        """Return active class IDs for targeting (e.g., for frame_parser)."""
+        # Placeholder: Adjust based on your targeting logic
+        # Example: Return all classes if no specific filter
+        return list(range(11))  # Matches cls_model_data in frame_parser.py
+
+    def quit(self):
+        """Stop the hotkey monitoring thread."""
+        self.running = False
+        if hasattr(self, 'hotkey_thread'):
+            self.hotkey_thread.join(timeout=1.0)
+        log_error("HotkeysWatcher stopped")
+
+# Example usage (if run standalone)
+if __name__ == "__main__":
+    from init import AppContext
+    context = AppContext()
+    context.initialize()
+    watcher = HotkeysWatcher(context)
+    try:
         while True:
-            try:
-                cfg_reload_prev_state = self.process_hotkeys(cfg_reload_prev_state)
-                if win32api.GetAsyncKeyState(Buttons.KEY_CODES.get(cfg.hotkey_exit)) & 0xFF:
-                    self.clean_shutdown()
-                    os._exit(0)
-            except Exception as e:
-                log_error("Hotkeys watcher error", e)
-                time.sleep(1)
-            # Introduce a small delay to prevent a busy loop
-            time.sleep(0.08)
-
-    def process_hotkeys(self, cfg_reload_prev_state):
-        self.app_pause = win32api.GetKeyState(Buttons.KEY_CODES[cfg.hotkey_pause])
-        app_reload_cfg = win32api.GetKeyState(Buttons.KEY_CODES[cfg.hotkey_reload_config])
-
-        # Handle F5 key: open config editor and wait for key release
-        if win32api.GetAsyncKeyState(Buttons.KEY_CODES['F5']) & 0x8000:
-            try:
-                time.sleep(0.08)
-                cfg.edit_config()
-            except Exception as e:
-                log_error("Error opening config editor", e)
-            # Wait for the F5 key to be released (consider debouncing if necessary)
-            while win32api.GetAsyncKeyState(Buttons.KEY_CODES['F5']) & 0x8000:
-                time.sleep(0.08)
-
-        # Reload configuration if state changes
-        if app_reload_cfg != cfg_reload_prev_state:
-            if app_reload_cfg in (1, 0):
-                cfg.read(verbose=True)
-                self.context.capture.restart()
-                self.context.mouse.update_settings()
-                self.clss = self.active_classes()  # Update clss after config reload
-                if not cfg.show_window:
-                    cv2.destroyAllWindows()
-        cfg_reload_prev_state = app_reload_cfg
-
-        return cfg_reload_prev_state
-
-    def active_classes(self) -> List[float]:
-        clss = [CLASS_0, CLASS_1]
-        if cfg.hideout_targets:
-            clss.extend([CLASS_5, CLASS_6])
-        if not cfg.disable_headshot:
-            clss.append(CLASS_7)
-        if cfg.third_person:
-            clss.append(CLASS_10)
-        return clss
-
-    def clean_shutdown(self):
-        self.context.cleanup()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        watcher.quit()
