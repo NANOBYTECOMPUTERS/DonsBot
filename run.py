@@ -60,7 +60,7 @@ def perform_detection(model, image, tracker):
         device=cfg.ai_device,
         half=True,
         max_det=MAX_DETECTIONS,
-        verbose=True
+        verbose=False
     )
     for result in results:  # Stream mode yields one result per frame
         detections = sv.Detections.from_ultralytics(result)
